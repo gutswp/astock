@@ -82,6 +82,94 @@ def print_portfolio(summary: PortfolioSummary) -> None:
     console.print()
 
 
+def print_watchlist(watches: list) -> None:
+    console = Console(width=120)
+    if not watches:
+        console.print("[yellow]关注池为空。用 astock alert add <code> -t <type> -v <val> 添加规则。[/yellow]")
+        return
+    console.print()
+    console.print(f"[bold]== 关注池 ({len(watches)} 只) ==[/bold]")
+    table = Table(show_header=True, header_style="bold", expand=True)
+    table.add_column("代码", ratio=2)
+    table.add_column("名称", ratio=3)
+    table.add_column("#", justify="right", ratio=1)
+    table.add_column("规则", ratio=8)
+    for w in watches:
+        rules = []
+        for i, a in enumerate(w.alerts):
+            desc = a.type
+            if a.value is not None:
+                desc += f"={a.value}"
+            if a.period is not None:
+                desc += f",period={a.period}"
+            rules.append(f"[dim]#{i}[/dim] {desc}")
+        table.add_row(w.code, w.name, str(len(w.alerts)), " | ".join(rules) or "-")
+    console.print(table)
+    console.print()
+
+
+def print_triggered_alerts(triggered: list[dict]) -> None:
+    console = Console(width=120)
+    if not triggered:
+        console.print("[dim]无预警触发[/dim]")
+        return
+    console.print()
+    console.print(f"[bold red]!! 触发 {len(triggered)} 条预警 !![/bold red]")
+    table = Table(show_header=True, header_style="bold red", expand=True)
+    table.add_column("代码", ratio=2)
+    table.add_column("名称", ratio=3)
+    table.add_column("类型", ratio=3)
+    table.add_column("现价", justify="right", ratio=2)
+    table.add_column("涨跌%", justify="right", ratio=2)
+    table.add_column("信息", ratio=6)
+    for t in triggered:
+        table.add_row(
+            t["code"], t["name"], t["type"],
+            f"{t['price']:.2f}",
+            _color_val(t["change_pct"], _fmt_pct),
+            t["message"],
+        )
+    console.print(table)
+    console.print()
+
+
+def print_journal(trades: list[dict]) -> None:
+    console = Console(width=130)
+    if not trades:
+        console.print("[yellow]没有匹配的交易记录[/yellow]")
+        return
+
+    console.print()
+    console.print(f"[bold]== 交易日志 ({len(trades)} 条) ==[/bold]")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold", show_lines=False, expand=True)
+    table.add_column("时间", ratio=3)
+    table.add_column("账户", ratio=2)
+    table.add_column("方向", ratio=1)
+    table.add_column("代码", ratio=2)
+    table.add_column("名称", ratio=3)
+    table.add_column("量", justify="right", ratio=2)
+    table.add_column("价", justify="right", ratio=2)
+    table.add_column("备注", ratio=5)
+
+    for t in trades:
+        action = t.get("action", "")
+        color = "red" if action == "buy" else "green"
+        table.add_row(
+            t.get("ts", "")[:16],
+            t.get("account", ""),
+            f"[{color}]{action.upper()}[/{color}]",
+            t.get("code", ""),
+            t.get("name", ""),
+            str(t.get("shares", "")),
+            f"{t.get('price', 0):.2f}",
+            t.get("note") or "",
+        )
+    console.print(table)
+    console.print()
+
+
 def print_scan_results(results: list[dict]) -> None:
     console = Console(width=130)
     if not results:

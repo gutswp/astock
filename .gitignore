@@ -1,6 +1,7 @@
 .env
 .venv/
-data/cache/
-data/reports/
+/data/
 __pycache__/
 *.pyc
+.DS_Store
+*.egg-info/

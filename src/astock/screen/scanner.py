@@ -1,29 +1,21 @@
 import json
-import subprocess
 
 import pandas as pd
 from rich.console import Console
 from rich.progress import Progress
 
 from astock.config import AppConfig
-from astock.data.provider import get_hist, SINA_HEADERS
+from astock.data.http import SINA_HEADERS, curl_get
+from astock.data.provider import get_all_spot, get_hist
 from astock.render.tables import print_scan_results
 from astock.screen.indicators import (
     calc_volume_ratio,
+    detect_boll_lower_bounce,
+    detect_kdj_golden_cross,
     detect_ma_breakthrough,
     detect_macd_golden_cross,
+    detect_rsi_oversold_reversal,
 )
-
-
-def _curl_get(url: str, headers: dict | None = None, timeout: int = 15, encoding: str = "utf-8") -> str:
-    cmd = ["curl", "-s", "--connect-timeout", str(timeout), url]
-    if headers:
-        for k, v in headers.items():
-            cmd.extend(["-H", f"{k}: {v}"])
-    result = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
-    if result.returncode != 0:
-        raise ConnectionError(f"curl failed: {result.stderr.decode(errors='replace')}")
-    return result.stdout.decode(encoding, errors="replace")
 
 
 def _get_all_stocks_sina() -> pd.DataFrame:
@@ -38,7 +30,7 @@ def _get_all_stocks_sina() -> pd.DataFrame:
             f"page={page}&num=80&sort=changepercent&asc=0&node=hs_a&symbol=&_s_r_a=page"
         )
         try:
-            raw = _curl_get(url, SINA_HEADERS, timeout=10)
+            raw = curl_get(url, SINA_HEADERS, timeout=10)
             if not raw or raw.strip() == "null" or raw.strip() == "[]":
                 break
             data = json.loads(raw)
@@ -92,6 +84,8 @@ def _scan_stock(code: str, config: AppConfig) -> tuple[list[str], float]:
             return signals, vol_ratio
 
         closes = hist["收盘"].astype(float)
+        highs = hist["最高"].astype(float)
+        lows = hist["最低"].astype(float)
         volumes = hist["成交量"].astype(float)
 
         if config.scan.macd_golden_cross and detect_macd_golden_cross(closes):
@@ -100,6 +94,15 @@ def _scan_stock(code: str, config: AppConfig) -> tuple[list[str], float]:
         for period in config.scan.ma_breakthrough:
             if detect_ma_breakthrough(closes, period):
                 signals.append(f"突破{period}日线")
+
+        if config.scan.rsi_oversold_reversal and detect_rsi_oversold_reversal(closes):
+            signals.append("RSI超卖反弹")
+
+        if config.scan.kdj_golden_cross and detect_kdj_golden_cross(highs, lows, closes):
+            signals.append("KDJ金叉")
+
+        if config.scan.boll_lower_bounce and detect_boll_lower_bounce(closes):
+            signals.append("BOLL下轨反弹")
 
         vol_ratio = calc_volume_ratio(volumes)
         if vol_ratio >= config.scan.volume_ratio_min:
@@ -110,49 +113,99 @@ def _scan_stock(code: str, config: AppConfig) -> tuple[list[str], float]:
     return signals, vol_ratio
 
 
-def run_scan(config: AppConfig) -> None:
+def _get_all_stocks_akshare() -> pd.DataFrame:
+    """akshare 兜底：字段与新浪对齐（总市值统一为万元）."""
     console = Console()
+    console.print("[dim]切到 AKShare 全市场兜底...[/dim]")
+    try:
+        df = get_all_spot()
+    except Exception as e:
+        console.print(f"[yellow]AKShare 也失败: {e}[/yellow]")
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    keep = ["代码", "名称", "最新价", "涨跌幅", "成交量", "成交额", "总市值", "量比"]
+    for col in keep:
+        if col not in df.columns:
+            df[col] = 0
+    df = df[keep].copy()
+    # akshare 总市值单位是元；新浪路径已是万元
+    df["总市值"] = df["总市值"].astype(float) / 10000
+    for col in ["最新价", "涨跌幅", "成交额", "量比"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df["成交量"] = pd.to_numeric(df["成交量"], errors="coerce").fillna(0).astype(int)
+    console.print(f"[dim]AKShare 兜底拿到 {len(df)} 只[/dim]")
+    return df
+
+
+def _score(signals: list[str]) -> int:
+    score = len(signals) * 20
+    if any("MACD" in s for s in signals):
+        score += 15
+    if any("60日" in s for s in signals):
+        score += 10
+    has_rsi = any("RSI" in s for s in signals)
+    has_boll = any("BOLL" in s for s in signals)
+    has_kdj = any("KDJ" in s for s in signals)
+    if has_rsi and has_boll:
+        score += 10  # 反转双确认
+    if has_kdj and (has_rsi or has_boll):
+        score += 5
+    return min(score, 100)
+
+
+def scan(config: AppConfig, silent: bool = False) -> list[dict]:
+    """核心扫描逻辑。silent=True 时不打印进度，供 advise 等其他命令复用."""
+    console = Console(quiet=silent)
     df = _get_all_stocks_sina()
     if df.empty:
-        console.print("[red]获取市场数据失败[/red]")
-        return
+        df = _get_all_stocks_akshare()
+    if df.empty:
+        if not silent:
+            console.print("[red]新浪与 AKShare 双通道均失败[/red]")
+        return []
 
     filtered = _filter_basic(df, config)
-    console.print(f"[dim]基础筛选后剩余 {len(filtered)} 只[/dim]")
+    if not silent:
+        console.print(f"[dim]基础筛选后剩余 {len(filtered)} 只[/dim]")
 
-    # 按涨幅和成交额初筛：涨幅1-8%且有一定成交额的活跃股
     candidates = filtered[
         (filtered["涨跌幅"] >= 1.0) &
         (filtered["涨跌幅"] <= 8.0) &
         (filtered["成交额"] > 1e8)
     ].head(150)
-    console.print(f"[dim]涨幅1-8%+成交额>1亿 候选 {len(candidates)} 只，开始技术面分析...[/dim]")
+    if not silent:
+        console.print(f"[dim]涨幅1-8%+成交额>1亿 候选 {len(candidates)} 只，开始技术面分析...[/dim]")
 
     results = []
-    with Progress(console=console) as progress:
-        task = progress.add_task("扫描中...", total=len(candidates))
+    if silent:
         for _, row in candidates.iterrows():
             code = row["代码"]
             signals, vol_ratio = _scan_stock(code, config)
             if signals:
-                score = len(signals) * 25
-                if any("MACD" in s for s in signals):
-                    score += 15
-                if any("60日" in s for s in signals):
-                    score += 10
-                score = min(score, 100)
                 results.append({
-                    "code": code,
-                    "name": row["名称"],
-                    "price": row["最新价"],
-                    "change_pct": row["涨跌幅"],
-                    "volume_ratio": vol_ratio,
-                    "signals": signals,
-                    "score": score,
+                    "code": code, "name": row["名称"], "price": row["最新价"],
+                    "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
+                    "signals": signals, "score": _score(signals),
                 })
-            progress.advance(task)
+    else:
+        with Progress(console=console) as progress:
+            task = progress.add_task("扫描中...", total=len(candidates))
+            for _, row in candidates.iterrows():
+                code = row["代码"]
+                signals, vol_ratio = _scan_stock(code, config)
+                if signals:
+                    results.append({
+                        "code": code, "name": row["名称"], "price": row["最新价"],
+                        "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
+                        "signals": signals, "score": _score(signals),
+                    })
+                progress.advance(task)
 
     results.sort(key=lambda x: x["score"], reverse=True)
-    results = results[:config.scan.max_results]
+    return results[:config.scan.max_results]
 
+
+def run_scan(config: AppConfig) -> None:
+    results = scan(config, silent=False)
     print_scan_results(results)

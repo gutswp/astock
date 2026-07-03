@@ -1,9 +1,8 @@
-import os
-
 import anthropic
 from rich.console import Console
 from rich.markdown import Markdown
 
+from astock.ai.client import make_client
 from astock.config import AppConfig
 from astock.data.provider import get_hist, get_spot, get_news
 
@@ -72,30 +71,6 @@ def _build_stock_context(code: str, config: AppConfig) -> str:
     return "\n".join(parts)
 
 
-def _load_env() -> None:
-    env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
-    env_path = os.path.normpath(env_path)
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
-
-
-def _make_client() -> anthropic.Anthropic:
-    _load_env()
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL")
-    kwargs = {}
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["base_url"] = base_url
-    return anthropic.Anthropic(**kwargs)
-
-
 def analyze_stock(code: str, config: AppConfig) -> None:
     console = Console(width=100)
 
@@ -105,7 +80,7 @@ def analyze_stock(code: str, config: AppConfig) -> None:
     context = _build_stock_context(code, config)
 
     try:
-        client = _make_client()
+        client = make_client()
     except anthropic.AuthenticationError:
         console.print("[red]API Key 无效或未设置[/red]")
         return

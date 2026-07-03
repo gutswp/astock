@@ -1,11 +1,13 @@
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
 
 from astock import CONFIG_DIR
 from astock.config import AppConfig, load_holdings
-from astock.data.provider import get_spot
+from astock.data.provider import get_industry, get_spot
+from astock.portfolio.journal import append_trade
 from astock.portfolio.models import Holding, Position, PortfolioSummary
 from astock.render.tables import print_portfolio
 
@@ -59,12 +61,20 @@ def _merge_positions(holdings: list[Holding], spot_df) -> list[Position]:
     return positions
 
 
+def _fetch_industries(codes: list[str]) -> dict[str, str]:
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return dict(zip(codes, ex.map(get_industry, codes)))
+
+
 def build_portfolio(config: AppConfig) -> PortfolioSummary:
     holdings = _collect_holdings(config)
     codes = list(set(h.code for h in holdings))
     spot_df = get_spot(codes)
 
     positions = _merge_positions(holdings, spot_df)
+    industries = _fetch_industries([p.code for p in positions])
+    for p in positions:
+        p.industry = industries.get(p.code, "未知")
 
     total_market_value = sum(p.market_value for p in positions)
     total_cost = sum(p.total_shares * p.avg_cost for p in positions)
@@ -87,7 +97,17 @@ def show_portfolio(config: AppConfig) -> None:
     print_portfolio(summary)
 
 
-def record_trade(account: str, code: str, shares: int, price: float, action: str) -> None:
+def record_trade(
+    account: str,
+    code: str,
+    shares: int,
+    price: float,
+    action: str,
+    note: str | None = None,
+) -> None:
+    from rich.console import Console
+    console = Console()
+
     path = CONFIG_DIR / "holdings.yaml"
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -98,8 +118,7 @@ def record_trade(account: str, code: str, shares: int, price: float, action: str
             break
 
     if target_acct is None:
-        from rich.console import Console
-        Console().print(f"[red]账户 {account} 不存在[/red]")
+        console.print(f"[red]账户 {account} 不存在[/red]")
         return
 
     existing = None
@@ -108,6 +127,10 @@ def record_trade(account: str, code: str, shares: int, price: float, action: str
             existing = h
             break
 
+    prev_shares = existing["shares"] if existing else 0
+    prev_cost = existing["cost"] if existing else 0.0
+    name = existing["name"] if existing else code
+
     if action == "buy":
         if existing:
             old_total = existing["shares"] * existing["cost"]
@@ -115,19 +138,42 @@ def record_trade(account: str, code: str, shares: int, price: float, action: str
             existing["shares"] += shares
             existing["cost"] = round((old_total + new_total) / existing["shares"], 3)
         else:
+            try:
+                spot = get_spot([code])
+                if not spot.empty:
+                    name = str(spot.iloc[0]["名称"])
+            except Exception:
+                pass
             target_acct["holdings"].append({
-                "code": code, "name": code, "shares": shares, "cost": price,
+                "code": code, "name": name, "shares": shares, "cost": price,
             })
     elif action == "sell":
-        if existing:
-            existing["shares"] -= shares
-            if existing["shares"] <= 0:
-                target_acct["holdings"].remove(existing)
-        else:
-            from rich.console import Console
-            Console().print(f"[red]账户 {account} 中没有 {code}[/red]")
+        if existing is None:
+            console.print(f"[red]账户 {account} 中没有 {code}[/red]")
             return
+        if shares > existing["shares"]:
+            console.print(
+                f"[red]卖出 {shares} 超过持仓 {existing['shares']}，拒绝[/red]"
+            )
+            return
+        existing["shares"] -= shares
+        if existing["shares"] <= 0:
+            target_acct["holdings"].remove(existing)
+
+    new_shares = 0
+    new_cost = 0.0
+    for h in target_acct["holdings"]:
+        if h["code"] == code:
+            new_shares = h["shares"]
+            new_cost = h["cost"]
+            break
 
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False), encoding="utf-8")
-    from rich.console import Console
-    Console().print(f"[green]{action.upper()} {code} x{shares} @{price} 已更新到 {account}[/green]")
+    append_trade(
+        account=account, code=code, name=name, action=action,
+        shares=shares, price=price, note=note,
+        prev_shares=prev_shares, prev_cost=prev_cost,
+        new_shares=new_shares, new_cost=new_cost,
+    )
+    tag = f" — {note}" if note else ""
+    console.print(f"[green]{action.upper()} {code} x{shares} @{price} 已记入 {account}{tag}[/green]")

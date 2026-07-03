@@ -1,0 +1,16 @@
+watches:
+- alerts:
+  - type: price_above
+    value: 40.0
+  - type: stop_loss
+    value: 34.5
+  - type: macd_cross
+  code: '000063'
+  name: 中兴通讯
+- alerts:
+  - type: change_above
+    value: 5.0
+  - period: 20
+    type: ma_break
+  code: '002230'
+  name: 科大讯飞

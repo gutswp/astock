@@ -1,44 +1,26 @@
 import json
-import subprocess
-import time
-from functools import wraps
 
 import pandas as pd
 
 from astock.data import cache
+from astock.data.http import SINA_HEADERS, curl_get, retry
 
 SPOT_TTL = 60
 HIST_TTL = 86400
 INDUSTRY_TTL = 604800
 
 SINA_SPOT_URL = "https://hq.sinajs.cn/list="
-SINA_HEADERS = {"Referer": "https://finance.sina.com.cn"}
 
-
-def _retry(fn, retries=3, delay=2):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        last_err = None
-        for i in range(retries):
-            try:
-                return fn(*args, **kwargs)
-            except Exception as e:
-                last_err = e
-                if i < retries - 1:
-                    time.sleep(delay * (i + 1))
-        raise last_err
-    return wrapper
-
-
-def _curl_get(url: str, headers: dict | None = None, timeout: int = 15, encoding: str = "utf-8") -> str:
-    cmd = ["curl", "-s", "--connect-timeout", str(timeout), url]
-    if headers:
-        for k, v in headers.items():
-            cmd.extend(["-H", f"{k}: {v}"])
-    result = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
-    if result.returncode != 0:
-        raise ConnectionError(f"curl failed: {result.stderr.decode(errors='replace')}")
-    return result.stdout.decode(encoding, errors="replace")
+__all__ = [
+    "SINA_HEADERS",  # re-export for backwards-compat
+    "get_spot",
+    "get_all_spot",
+    "get_hist",
+    "get_fund_flow",
+    "get_sector_flow",
+    "get_industry",
+    "get_news",
+]
 
 
 def _code_to_sina(code: str) -> str:
@@ -77,7 +59,7 @@ def _parse_sina_line(line: str) -> dict | None:
     }
 
 
-@_retry
+@retry
 def get_spot(codes: list[str]) -> pd.DataFrame:
     key = f"spot_{'_'.join(sorted(codes))}"
     cached = cache.get(key, SPOT_TTL)
@@ -86,7 +68,7 @@ def get_spot(codes: list[str]) -> pd.DataFrame:
 
     sina_codes = [_code_to_sina(c) for c in codes]
     url = SINA_SPOT_URL + ",".join(sina_codes)
-    raw = _curl_get(url, SINA_HEADERS, encoding="gbk")
+    raw = curl_get(url, SINA_HEADERS, encoding="gbk")
 
     records = []
     for line in raw.strip().split("\n"):
@@ -100,7 +82,7 @@ def get_spot(codes: list[str]) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-@_retry
+@retry
 def get_all_spot() -> pd.DataFrame:
     key = "all_spot"
     cached = cache.get(key, SPOT_TTL)
@@ -119,7 +101,7 @@ def get_all_spot() -> pd.DataFrame:
         )
 
 
-@_retry
+@retry
 def get_hist(code: str, days: int = 120) -> pd.DataFrame:
     key = f"hist_{code}_{days}"
     cached = cache.get(key, HIST_TTL)
@@ -133,7 +115,7 @@ def get_hist(code: str, days: int = 120) -> pd.DataFrame:
         f"json_v2.php/CN_MarketData.getKLineData?"
         f"symbol={market}{code}&scale=240&ma=no&datalen={days}"
     )
-    raw = _curl_get(url, SINA_HEADERS)
+    raw = curl_get(url, SINA_HEADERS)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -186,19 +168,35 @@ def get_sector_flow() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _em_secid(code: str) -> str:
+    code = code.zfill(6)
+    if code.startswith(("5", "6", "9")):
+        return f"1.{code}"
+    return f"0.{code}"
+
+
 def get_industry(code: str) -> str:
     key = f"industry_{code}"
     cached = cache.get(key, INDUSTRY_TTL)
     if cached is not None:
         return cached.get("industry", "未知")
+
+    # ETF/LOF 无行业分类，直接标记
+    if code.zfill(6).startswith(("1", "5")):
+        cache.put(key, {"industry": "ETF/基金"})
+        return "ETF/基金"
+
     try:
-        import akshare as ak
-        df = ak.stock_individual_info_em(symbol=code)
-        for _, row in df.iterrows():
-            if row["item"] == "行业":
-                industry = row["value"]
-                cache.put(key, {"industry": industry})
-                return industry
+        url = (
+            f"https://push2delay.eastmoney.com/api/qt/stock/get?"
+            f"fltt=2&invt=2&fields=f127&secid={_em_secid(code)}"
+        )
+        raw = curl_get(url, timeout=8)
+        data = json.loads(raw).get("data") or {}
+        industry = data.get("f127") or ""
+        if industry and industry != "-":
+            cache.put(key, {"industry": industry})
+            return industry
     except Exception:
         pass
     return "未知"
@@ -210,3 +208,46 @@ def get_news(code: str) -> pd.DataFrame:
         return ak.stock_news_em(symbol=code)
     except Exception:
         return pd.DataFrame()
+
+
+# 主要指数：上证/深证/创业板/沪深300/科创50
+_INDEX_SPEC = [
+    ("1.000001", "上证指数"),
+    ("0.399001", "深证成指"),
+    ("0.399006", "创业板指"),
+    ("1.000300", "沪深300"),
+    ("1.000688", "科创50"),
+]
+
+
+def get_indices() -> pd.DataFrame:
+    key = "indices"
+    cached = cache.get(key, SPOT_TTL)
+    if cached is not None:
+        return pd.DataFrame(cached)
+
+    records = []
+    for secid, name in _INDEX_SPEC:
+        try:
+            url = (
+                f"https://push2delay.eastmoney.com/api/qt/stock/get?"
+                f"fltt=2&invt=2&fields=f43,f169,f170,f47&secid={secid}"
+            )
+            raw = curl_get(url, timeout=8)
+            data = json.loads(raw).get("data") or {}
+            if not data:
+                continue
+            records.append({
+                "名称": name,
+                "代码": secid.split(".")[1],
+                "最新价": float(data.get("f43") or 0),
+                "涨跌额": float(data.get("f169") or 0),
+                "涨跌幅": float(data.get("f170") or 0),
+                "成交量": int(data.get("f47") or 0),
+            })
+        except Exception:
+            continue
+
+    if records:
+        cache.put(key, records)
+    return pd.DataFrame(records)

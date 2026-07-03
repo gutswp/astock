@@ -31,6 +31,9 @@ class ScanConfig:
     ma_breakthrough: list[int] = field(default_factory=lambda: [5, 10, 20, 60])
     fund_flow_min: float = 5000
     macd_golden_cross: bool = True
+    rsi_oversold_reversal: bool = True
+    kdj_golden_cross: bool = True
+    boll_lower_bounce: bool = True
 
 
 @dataclass
@@ -65,6 +68,9 @@ def load_settings(path: Path | None = None) -> ScanConfig:
         ma_breakthrough=signals.get("ma_breakthrough", [5, 10, 20, 60]),
         fund_flow_min=signals.get("fund_flow_min", 5000),
         macd_golden_cross=signals.get("macd_golden_cross", True),
+        rsi_oversold_reversal=signals.get("rsi_oversold_reversal", True),
+        kdj_golden_cross=signals.get("kdj_golden_cross", True),
+        boll_lower_bounce=signals.get("boll_lower_bounce", True),
     )
 
 
