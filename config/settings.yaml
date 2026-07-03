@@ -1,0 +1,24 @@
+scan:
+  min_market_cap: 20         # 最低市值（亿元），过滤小盘
+  exclude_st: true
+  exclude_limit_up: true     # 排除涨停（追不进）
+  max_results: 30
+
+  signals:
+    macd_golden_cross: true
+    volume_ratio_min: 2.0    # 量比阈值
+    ma_breakthrough:         # 突破均线
+      - 5
+      - 10
+      - 20
+      - 60
+    fund_flow_min: 5000      # 主力净流入最低（万元）
+
+ai:
+  model: claude-sonnet-4-6
+  max_tokens: 2000
+
+cache:
+  spot_ttl_seconds: 60       # 实时行情缓存 1 分钟
+  hist_ttl_seconds: 86400    # 日线缓存 1 天
+  industry_ttl_seconds: 604800  # 行业缓存 7 天
