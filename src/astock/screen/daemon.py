@@ -10,8 +10,10 @@ from pathlib import Path
 import yaml
 
 from astock import CONFIG_DIR, DATA_DIR
+from astock.config import load_config
 from astock.notify import notify
 from astock.screen.alerts import check_watch, load_watchlist
+from astock.screen.position_monitor import check_all_positions
 
 ALERTS_LOG = DATA_DIR / "alerts.log"
 
@@ -30,37 +32,51 @@ def _log(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _dispatch(hit: dict, seen: dict, dedup_window: int) -> None:
+    key = (hit["code"], hit["type"], round(hit["price"], 1))
+    now = time.time()
+    last = seen.get(key, 0)
+    if now - last < dedup_window:
+        return
+    seen[key] = now
+    title = f"⚠️ AStock 预警：{hit['name']} {hit['type']}"
+    body = (
+        f"{hit['name']}（{hit['code']}）触发 {hit['type']}\n"
+        f"现价 {hit['price']:.2f}，涨跌 {hit['change_pct']:+.2f}%\n"
+        f"{hit['message']}\n\n{datetime.now():%Y-%m-%d %H:%M:%S}"
+    )
+    channels = notify(title, body)
+    _log({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        **hit,
+        "notified": channels,
+    })
+
+
 def _run_loop(stop_event: threading.Event, interval: int, dedup_window: int) -> None:
     seen: dict[tuple, float] = {}
     while not stop_event.wait(interval):
+        # 1. 关注池
         try:
             watches = load_watchlist()
         except Exception:
-            continue
+            watches = []
         for w in watches:
             try:
                 hits = check_watch(w)
             except Exception:
-                continue
+                hits = []
             for h in hits:
-                key = (h["code"], h["type"], round(h["price"], 1))
-                now = time.time()
-                last = seen.get(key, 0)
-                if now - last < dedup_window:
-                    continue
-                seen[key] = now
-                title = f"⚠️ AStock 预警：{h['name']} {h['type']}"
-                body = (
-                    f"{h['name']}（{h['code']}）触发 {h['type']}\n"
-                    f"现价 {h['price']:.2f}，涨跌 {h['change_pct']:+.2f}%\n"
-                    f"{h['message']}\n\n{datetime.now():%Y-%m-%d %H:%M:%S}"
-                )
-                channels = notify(title, body)
-                _log({
-                    "ts": datetime.now().isoformat(timespec="seconds"),
-                    **h,
-                    "notified": channels,
-                })
+                _dispatch(h, seen, dedup_window)
+
+        # 2. 持仓风险监控
+        try:
+            cfg = load_config()
+            pos_hits = check_all_positions(cfg)
+        except Exception:
+            pos_hits = []
+        for h in pos_hits:
+            _dispatch(h, seen, dedup_window)
 
 
 _daemon_thread: threading.Thread | None = None

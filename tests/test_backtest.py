@@ -47,3 +47,37 @@ def test_win_rate_and_avg_return():
     assert r is not None
     if r.trades:
         assert 0 <= r.win_rate <= 100
+
+
+def test_equity_curve_empty():
+    result = bt.BacktestResult(
+        code="X", strategy="s", strategy_label="s", hold_days=5,
+        total_signals=0, trades=[], win_rate=0, avg_return=0,
+        total_return=0, best_return=0, worst_return=0,
+    )
+    curve = bt.equity_curve(result, initial=100000)
+    assert curve["final_full"] == 100000
+    assert curve["final_sized"] == 100000
+
+
+def test_equity_curve_with_trades():
+    trades = [
+        bt.Trade("D1", 10.0, "D3", 11.0, 10.0),   # +10%
+        bt.Trade("D5", 11.0, "D7", 9.9, -10.0),   # -10%
+        bt.Trade("D9", 10.0, "D11", 12.0, 20.0),  # +20%
+    ]
+    result = bt.BacktestResult(
+        code="X", strategy="s", strategy_label="s", hold_days=2,
+        total_signals=3, trades=trades,
+        win_rate=66.67, avg_return=6.67, total_return=18.8,
+        best_return=20, worst_return=-10,
+        avg_win=15.0, avg_loss=10.0,
+    )
+    curve = bt.equity_curve(result, initial=100000)
+    # 全仓：1.1 * 0.9 * 1.2 = 1.188 → 118800
+    assert abs(curve["final_full"] - 118800) < 1
+    # 凯利分数 = (1.5*0.6667 - 0.3333)/1.5 = 0.4445（因为 win/loss ratio = 1.5）
+    # 凯利不应该 <= 0
+    assert curve["kelly_fraction_used"] > 0
+    assert curve["final_sized"] > 100000  # 有正期望，凯利也应盈利
+    assert curve["full_max_dd"] > 0  # 中间有回撤（-10% 那次）

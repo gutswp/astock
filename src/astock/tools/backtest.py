@@ -213,6 +213,199 @@ def run_batch(codes: list[str], strategy: str, hold_days: int = 5,
     return results
 
 
+def equity_curve(result: BacktestResult, initial: float = 100000.0,
+                 kelly_fraction_val: float = 0.0) -> dict:
+    """给一次回测结果，返回资金曲线。
+    kelly_fraction_val 是采用的分数凯利比例（0 = 全仓），其余留现金。
+    返回：
+      { "trades_idx": [0,1,...], "full": [...], "sized": [...],
+        "full_max_dd": %, "sized_max_dd": %, "final_full": ..., "final_sized": ... }
+    """
+    if not result.trades:
+        return {"trades_idx": [], "full": [initial], "sized": [initial],
+                "full_max_dd": 0, "sized_max_dd": 0,
+                "final_full": initial, "final_sized": initial}
+
+    # 计算凯利分数（如果给了）
+    f = kelly_fraction_val
+    if f <= 0 and result.avg_win > 0 and result.avg_loss > 0:
+        # 自动用 result 的胜率/盈亏比算标准凯利
+        from astock.tools.sizing import kelly_fraction
+        f = max(0.0, kelly_fraction(result.win_rate, result.avg_win, result.avg_loss))
+    f = min(f, 1.0)
+
+    full = [initial]
+    sized = [initial]
+    cur_full, cur_sized = initial, initial
+    for t in result.trades:
+        r = t.return_pct / 100
+        cur_full = cur_full * (1 + r)
+        cur_sized = cur_sized * (1 + r * f) if f > 0 else cur_sized
+        full.append(cur_full)
+        sized.append(cur_sized)
+
+    def _max_dd(series: list[float]) -> float:
+        peak = series[0]
+        max_dd = 0.0
+        for v in series:
+            if v > peak:
+                peak = v
+            dd = (peak - v) / peak * 100 if peak else 0
+            if dd > max_dd:
+                max_dd = dd
+        return max_dd
+
+    return {
+        "trades_idx": list(range(len(full))),
+        "full": [round(v, 2) for v in full],
+        "sized": [round(v, 2) for v in sized],
+        "full_max_dd": round(_max_dd(full), 2),
+        "sized_max_dd": round(_max_dd(sized), 2),
+        "final_full": round(full[-1], 2),
+        "final_sized": round(sized[-1], 2),
+        "kelly_fraction_used": round(f, 4),
+    }
+
+
+STRATEGY_FAMILIES = {
+    "ma_break": "均线突破",
+    "rsi": "RSI 超卖反弹",
+    "macd": "MACD 金叉",
+    "kdj": "KDJ 金叉（低位）",
+}
+
+
+def _signals_with_params(closes, highs, lows, family: str, params: dict) -> list[int]:
+    from astock.screen.indicators import (
+        calc_kdj, calc_ma, calc_macd, calc_rsi,
+    )
+    n = len(closes)
+    idxs: list[int] = []
+    if family == "ma_break":
+        period = params["period"]
+        if n < period + 1:
+            return idxs
+        ma = calc_ma(closes, period)
+        for i in range(1, n):
+            if pd.isna(ma.iloc[i - 1]) or pd.isna(ma.iloc[i]):
+                continue
+            if closes.iloc[i - 1] < ma.iloc[i - 1] and closes.iloc[i] >= ma.iloc[i]:
+                idxs.append(i)
+    elif family == "rsi":
+        period = params["period"]
+        if n < period + 2:
+            return idxs
+        rsi = calc_rsi(closes, period)
+        for i in range(1, n):
+            if pd.isna(rsi.iloc[i - 1]) or pd.isna(rsi.iloc[i]):
+                continue
+            if rsi.iloc[i - 1] < 30 and rsi.iloc[i] >= 30:
+                idxs.append(i)
+    elif family == "macd":
+        fast = params.get("fast", 12)
+        slow = params.get("slow", 26)
+        sig = params.get("signal", 9)
+        if n < slow + sig:
+            return idxs
+        dif, dea, _ = calc_macd(closes, fast=fast, slow=slow, signal=sig)
+        for i in range(1, n):
+            if pd.isna(dif.iloc[i - 1]) or pd.isna(dea.iloc[i - 1]):
+                continue
+            if dif.iloc[i - 1] < dea.iloc[i - 1] and dif.iloc[i] >= dea.iloc[i]:
+                idxs.append(i)
+    elif family == "kdj":
+        if n < 12:
+            return idxs
+        k, d, _ = calc_kdj(highs, lows, closes,
+                            n=params.get("n", 9),
+                            m1=params.get("m1", 3),
+                            m2=params.get("m2", 3))
+        threshold = params.get("threshold", 50)
+        for i in range(1, n):
+            if pd.isna(k.iloc[i - 1]) or pd.isna(d.iloc[i - 1]):
+                continue
+            if k.iloc[i - 1] < d.iloc[i - 1] and k.iloc[i] >= d.iloc[i] and k.iloc[i] < threshold:
+                idxs.append(i)
+    return idxs
+
+
+def _grid_for(family: str) -> list[dict]:
+    if family == "ma_break":
+        return [{"period": p, "hold": h}
+                for p in [5, 10, 15, 20, 30, 40, 60]
+                for h in [3, 5, 10, 20]]
+    if family == "rsi":
+        return [{"period": p, "hold": h}
+                for p in [7, 9, 14, 21, 28]
+                for h in [3, 5, 10, 20]]
+    if family == "macd":
+        return [{"fast": f, "slow": s, "signal": sig, "hold": h}
+                for f in [8, 12, 16]
+                for s in [22, 26, 30]
+                for sig in [7, 9, 11]
+                for h in [3, 5, 10, 20]]
+    if family == "kdj":
+        return [{"n": n, "m1": m1, "m2": m2, "threshold": th, "hold": h}
+                for n in [7, 9, 14]
+                for m1 in [3]
+                for m2 in [3]
+                for th in [30, 50, 70]
+                for h in [3, 5, 10, 20]]
+    return []
+
+
+def grid_search(code: str, family: str, days: int = 500) -> list[dict]:
+    """跑一个策略族的参数网格。返回按 kelly 降序的 top 10."""
+    if family not in STRATEGY_FAMILIES:
+        return []
+    df = get_hist(code, days)
+    if df.empty or len(df) < 60:
+        return []
+    closes = df["收盘"].astype(float)
+    highs = df["最高"].astype(float)
+    lows = df["最低"].astype(float)
+
+    from astock.tools.sizing import kelly_fraction
+
+    combos = _grid_for(family)
+    results = []
+    for c in combos:
+        hold = c["hold"]
+        params = {k: v for k, v in c.items() if k != "hold"}
+        idxs = _signals_with_params(closes, highs, lows, family, params)
+        rets = []
+        for idx in idxs:
+            if idx + hold >= len(closes):
+                continue
+            ep = float(closes.iloc[idx])
+            xp = float(closes.iloc[idx + hold])
+            rets.append((xp - ep) / ep * 100)
+        if len(rets) < 3:
+            continue
+        wins = [r for r in rets if r > 0]
+        losses = [-r for r in rets if r < 0]
+        win_rate = len(wins) / len(rets) * 100
+        avg_w = (sum(wins) / len(wins)) if wins else 0
+        avg_l = (sum(losses) / len(losses)) if losses else 0
+        avg = sum(rets) / len(rets)
+        k = kelly_fraction(win_rate, avg_w, avg_l) if (avg_w and avg_l) else 0
+        results.append({
+            "params": c,
+            "count": len(rets),
+            "win_rate": round(win_rate, 2),
+            "avg_return": round(avg, 2),
+            "avg_win": round(avg_w, 2),
+            "avg_loss": round(avg_l, 2),
+            "kelly": round(k, 4),
+        })
+    # 按凯利 + 样本量综合排序
+    results.sort(
+        key=lambda x: (x["kelly"] * min(x["count"] / 5, 2), x["avg_return"]),
+        reverse=True,
+    )
+    return results[:10]
+
+
 def aggregate(results: list[BacktestResult]) -> dict:
     """跨股票聚合：平均胜率、平均单笔收益、总样本、样本加权收益."""
     if not results:

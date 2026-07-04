@@ -4,7 +4,10 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <h1 class="text-xl font-semibold">信号回测</h1>
-    <a href="/tools/backtest/batch" class="text-xs text-blue-400 hover:underline">批量模式 →</a>
+    <div class="flex gap-3">
+      <a href="/tools/backtest/batch" class="text-xs text-blue-400 hover:underline">批量模式 →</a>
+      <a href="/tools/optimize" class="text-xs text-blue-400 hover:underline">参数优化 →</a>
+    </div>
   </div>
   <p class="text-xs text-gray-500">在历史 K 线上找信号触发日，模拟每次买入并持有 N 天卖出，统计胜率与平均收益。样本越多越有意义。</p>
 
@@ -111,6 +114,68 @@
     <div class="text-center text-gray-500 py-6 text-sm">回看窗口内没有有效样本。可以扩大回看天数或换一只标的。</div>
     {% endif %}
   </div>
+
+  {% if curve and curve.trades_idx|length > 1 %}
+  <div class="card p-6">
+    <div class="flex items-center justify-between mb-3">
+      <div class="font-semibold">资金曲线（Kelly f={{ curve.kelly_fraction_used }}）</div>
+      <div class="text-xs text-gray-500">初始 100000 元，逐笔复利</div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
+      <div>
+        <div class="kpi-label">全仓终值</div>
+        <div class="kpi-value {% if curve.final_full > 100000 %}pos{% elif curve.final_full < 100000 %}neg{% endif %}">
+          {{ (curve.final_full / 10000)|round(2) }}万
+        </div>
+      </div>
+      <div>
+        <div class="kpi-label">凯利终值</div>
+        <div class="kpi-value {% if curve.final_sized > 100000 %}pos{% elif curve.final_sized < 100000 %}neg{% endif %}">
+          {{ (curve.final_sized / 10000)|round(2) }}万
+        </div>
+      </div>
+      <div>
+        <div class="kpi-label">全仓最大回撤</div>
+        <div class="kpi-value neg">{{ curve.full_max_dd }}%</div>
+      </div>
+      <div>
+        <div class="kpi-label">凯利最大回撤</div>
+        <div class="kpi-value neg">{{ curve.sized_max_dd }}%</div>
+      </div>
+    </div>
+    <div id="equity-chart" style="width:100%; height:280px;"></div>
+    <script>
+    (function(){
+      const el = document.currentScript.parentElement.querySelector('#equity-chart');
+      const c = {{ curve|tojson }};
+      const ch = echarts.init(el, 'dark', {renderer: 'canvas'});
+      ch.setOption({
+        backgroundColor: 'transparent',
+        animation: false,
+        legend: {top: 4, textStyle: {color: '#94a3b8', fontSize: 11}, data: ['全仓', '凯利']},
+        tooltip: {trigger: 'axis',
+          backgroundColor: '#111827', borderColor: '#1f2937',
+          textStyle: {color: '#e5e7eb'}},
+        grid: {left: 60, right: 20, top: 30, bottom: 30},
+        xAxis: {type: 'category', data: c.trades_idx.map(i => '#' + i),
+          axisLine: {lineStyle: {color: '#374151'}},
+          axisLabel: {color: '#94a3b8', fontSize: 10}},
+        yAxis: {type: 'value', scale: true,
+          axisLabel: {color: '#94a3b8', fontSize: 10, formatter: v => (v/10000).toFixed(1) + '万'},
+          splitLine: {lineStyle: {color: '#1f2937'}}},
+        series: [
+          {name: '全仓', type: 'line', data: c.full, smooth: true, symbol: 'none',
+            lineStyle: {width: 1.5, color: '#ef4444'}},
+          {name: '凯利', type: 'line', data: c.sized, smooth: true, symbol: 'none',
+            lineStyle: {width: 1.5, color: '#60a5fa'}}
+        ]
+      });
+      window.addEventListener('resize', () => ch.resize());
+    })();
+    </script>
+  </div>
+  {% endif %}
+
   {% elif result is not none %}
   <div class="card p-6 text-center text-gray-500 text-sm">该代码历史数据不足或获取失败。</div>
   {% endif %}

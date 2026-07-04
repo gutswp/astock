@@ -134,6 +134,39 @@ async def backtest_batch_page(request: Request):
     )
 
 
+@router.get("/optimize")
+async def optimize_page(request: Request):
+    return render(
+        request, "optimize.html",
+        active="tools", title="策略参数优化",
+        families=bt.STRATEGY_FAMILIES,
+        result=None,
+    )
+
+
+@router.post("/optimize")
+async def optimize_run(
+    request: Request,
+    code: str = Form(...),
+    family: str = Form(...),
+    days: int = Form(500),
+):
+    result = await run_in_threadpool(bt.grid_search, code.zfill(6), family, days)
+    name = ""
+    try:
+        df = await run_in_threadpool(get_spot, [code.zfill(6)])
+        if not df.empty:
+            name = str(df.iloc[0]["名称"])
+    except Exception:
+        pass
+    return render(
+        request, "optimize.html",
+        active="tools", title="策略参数优化",
+        families=bt.STRATEGY_FAMILIES,
+        result=result, code=code, name=name, family=family, days=days,
+    )
+
+
 @router.post("/backtest/batch")
 async def backtest_batch_run(request: Request):
     form = await request.form()
@@ -203,10 +236,14 @@ async def backtest_run(
             name = str(df.iloc[0]["名称"])
     except Exception:
         pass
+    curve = None
+    if result and result.trades:
+        curve = bt.equity_curve(result)
     return render(
         request, "backtest.html",
         active="tools", title="信号回测",
         strategies=bt.STRATEGIES,
         result=result, code=code, name=name,
         hold_days=hold_days, days=days, strategy=strategy,
+        curve=curve,
     )

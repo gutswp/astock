@@ -20,6 +20,8 @@ scan:
     dmi_golden_cross: false        # +DI 上穿 -DI 且 ADX ≥ 20（可开）
     sar_bullish_flip: false        # SAR 翻多（可开）
 
+  composite_scoring: false         # 综合评分：叠加行业板块资金流（打开会拉行业+板块流，多约 5-10s）
+
 ai:
   model: claude-sonnet-4-6
   max_tokens: 2000
@@ -34,6 +36,13 @@ alert_daemon:
   enabled: false             # 默认关，避免市场时段外反复推送
   interval_seconds: 300      # 每 5 分钟扫一次关注池
   dedup_window_seconds: 3600 # 同一 (code,type,round(price,1)) 1 小时内只推一次
+
+# 持仓风险监控（跟 alert_daemon 同一循环，通过其 enabled 生效）
+position_monitor:
+  enabled: false             # 默认关
+  stop_loss_pct: -20         # 亏损达 20% 触发
+  take_profit_pct: 30        # 盈利达 30% 触发（提示止盈机会）
+  big_move_pct: 7            # 单日绝对涨跌 ≥ 7% 触发
 
 # 推送通道（预警触发时使用，也可推 AI 报告完成）
 notify:

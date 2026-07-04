@@ -8,7 +8,7 @@ from rich.progress import Progress
 
 from astock.config import AppConfig
 from astock.data.http import SINA_HEADERS, curl_get
-from astock.data.provider import get_all_spot, get_hist
+from astock.data.provider import get_all_spot, get_hist, get_industry, get_sector_flow
 from astock.render.tables import print_scan_results
 from astock.screen.indicators import (
     calc_volume_ratio,
@@ -152,7 +152,7 @@ def _get_all_stocks_akshare() -> pd.DataFrame:
     return df
 
 
-def _score(signals: list[str]) -> int:
+def _score(signals: list[str], sector_boost: int = 0) -> int:
     score = len(signals) * 20
     if any("MACD" in s for s in signals):
         score += 15
@@ -162,10 +162,28 @@ def _score(signals: list[str]) -> int:
     has_boll = any("BOLL" in s for s in signals)
     has_kdj = any("KDJ" in s for s in signals)
     if has_rsi and has_boll:
-        score += 10  # 反转双确认
+        score += 10
     if has_kdj and (has_rsi or has_boll):
         score += 5
+    score += sector_boost
     return min(score, 100)
+
+
+def _build_sector_boost_map() -> dict[str, int]:
+    """行业板块 → 加分值。top 10 板块按排名递减加 15 → 6."""
+    boost: dict[str, int] = {}
+    try:
+        sf = get_sector_flow()
+    except Exception:
+        return boost
+    if sf.empty:
+        return boost
+    for i, (_, r) in enumerate(sf.head(10).iterrows()):
+        name = r.get("名称") or r.get("行业") or ""
+        if not name:
+            continue
+        boost[str(name)] = max(6, 15 - i)  # top1=+15, top10=+6
+    return boost
 
 
 def scan(
@@ -208,6 +226,13 @@ def scan(
     if progress_cb:
         progress_cb("技术面分析", 0, total)
 
+    # 综合评分预备：拉一次板块资金流建立 boost map
+    sector_boost_map: dict[str, int] = {}
+    if config.scan.composite_scoring:
+        if progress_cb:
+            progress_cb("拉板块资金流", 0, 1)
+        sector_boost_map = _build_sector_boost_map()
+
     results = []
     results_lock = threading.Lock()
     counter = {"done": 0}
@@ -219,10 +244,16 @@ def scan(
         _, row = row_tuple
         signals, vol_ratio = _scan_stock(row["代码"], config)
         if signals:
+            boost = 0
+            industry = ""
+            if sector_boost_map:
+                industry = get_industry(row["代码"])  # 7天缓存
+                boost = sector_boost_map.get(industry, 0)
             hit = {
                 "code": row["代码"], "name": row["名称"], "price": row["最新价"],
                 "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
-                "signals": signals, "score": _score(signals),
+                "signals": signals, "score": _score(signals, sector_boost=boost),
+                "industry": industry, "sector_boost": boost,
             }
             with results_lock:
                 results.append(hit)
