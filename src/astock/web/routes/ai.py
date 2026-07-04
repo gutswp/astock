@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -5,12 +6,13 @@ import anthropic
 import markdown as md_lib
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
-from starlette.concurrency import run_in_threadpool
+from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from astock import DATA_DIR
-from astock.ai.advisor import generate_advise
-from astock.ai.analyst import generate_analysis
-from astock.ai.reviewer import generate_review
+from astock.ai.advisor import generate_advise, stream_advise
+from astock.ai.analyst import generate_analysis, stream_analysis
+from astock.ai.reviewer import generate_review, stream_review
 from astock.data.provider import get_spot
 from astock.web.deps import render
 
@@ -44,19 +46,26 @@ async def advise_page(request: Request):
 
 @router.post("/advise/run")
 async def advise_run(request: Request):
-    config = request.app.state.config
-    try:
-        advice, path = await run_in_threadpool(generate_advise, config)
-    except anthropic.AuthenticationError:
-        return HTMLResponse('<div class="text-up p-4">API Key 无效或未设置</div>', status_code=200)
-    except Exception as e:
-        return HTMLResponse(f'<div class="text-up p-4">生成失败: {e}</div>', status_code=200)
+    """点击生成后返回流式外壳（含 EventSource JS）。"""
     return render(
-        request, "partials/ai_result.html",
+        request, "partials/ai_stream.html",
         title=f"AI 决策报告 · {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        html=_md(advice),
-        saved_path=path,
+        stream_url="/advise/stream",
     )
+
+
+@router.get("/advise/stream")
+async def advise_stream(request: Request):
+    config = request.app.state.config
+    gen = stream_advise(config)
+    async_gen = iterate_in_threadpool(gen)
+
+    async def event_source():
+        async for event, data in async_gen:
+            if await request.is_disconnected():
+                break
+            yield {"event": event, "data": data}
+    return EventSourceResponse(event_source())
 
 
 @router.get("/advise/history/{date}")
@@ -85,26 +94,25 @@ async def review_page(request: Request):
 
 @router.post("/review/run")
 async def review_run(request: Request, days: int = Form(90)):
-    config = request.app.state.config
-    try:
-        result = await run_in_threadpool(generate_review, config, days)
-    except anthropic.AuthenticationError:
-        return HTMLResponse('<div class="text-up p-4">API Key 无效或未设置</div>')
-    except Exception as e:
-        return HTMLResponse(f'<div class="text-up p-4">生成失败: {e}</div>')
-    if result is None:
-        return HTMLResponse(
-            '<div class="card p-6 text-center text-gray-400">'
-            '尚无交易记录。等你用 <code class="text-white">astock buy/sell -n "..."</code> '
-            '或在交易页记几笔后再回来复盘。</div>'
-        )
-    review, path = result
     return render(
-        request, "partials/ai_result.html",
+        request, "partials/ai_stream.html",
         title=f"AI 复盘 · 最近 {days} 天",
-        html=_md(review),
-        saved_path=path,
+        stream_url=f"/review/stream?days={days}",
     )
+
+
+@router.get("/review/stream")
+async def review_stream(request: Request, days: int = 90):
+    config = request.app.state.config
+    gen = stream_review(config, days)
+    async_gen = iterate_in_threadpool(gen)
+
+    async def event_source():
+        async for event, data in async_gen:
+            if await request.is_disconnected():
+                break
+            yield {"event": event, "data": data}
+    return EventSourceResponse(event_source())
 
 
 @router.get("/review/history/{date}")
@@ -137,15 +145,22 @@ async def analyze_page(request: Request, code: str):
 
 @router.post("/analyze/{code}/run")
 async def analyze_run(request: Request, code: str):
-    config = request.app.state.config
-    try:
-        result = await run_in_threadpool(generate_analysis, code, config)
-    except anthropic.AuthenticationError:
-        return HTMLResponse('<div class="text-up p-4">API Key 无效或未设置</div>')
-    except Exception as e:
-        return HTMLResponse(f'<div class="text-up p-4">分析失败: {e}</div>')
     return render(
-        request, "partials/ai_result.html",
+        request, "partials/ai_stream.html",
         title=f"分析 · {code}",
-        html=_md(result),
+        stream_url=f"/analyze/{code}/stream",
     )
+
+
+@router.get("/analyze/{code}/stream")
+async def analyze_stream(request: Request, code: str):
+    config = request.app.state.config
+    gen = stream_analysis(code, config)
+    async_gen = iterate_in_threadpool(gen)
+
+    async def event_source():
+        async for event, data in async_gen:
+            if await request.is_disconnected():
+                break
+            yield {"event": event, "data": data}
+    return EventSourceResponse(event_source())

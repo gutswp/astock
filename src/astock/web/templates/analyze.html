@@ -4,17 +4,142 @@
   <div class="card p-6 flex items-center justify-between">
     <div>
       <h1 class="text-lg font-semibold">{{ name }} <span class="font-mono text-gray-500 text-base">{{ code }}</span></h1>
-      <p class="text-xs text-gray-500 mt-1">AI 单股深度分析（技术面 · 消息面 · 操作建议）</p>
+      <p class="text-xs text-gray-500 mt-1">K 线 + AI 单股深度分析（技术面 · 消息面 · 操作建议）</p>
     </div>
-    <div class="text-xs text-gray-500 htmx-indicator" id="analyze-loading">分析中…（约 20-40s）</div>
+    <div class="text-xs text-gray-500 htmx-indicator" id="analyze-loading">加载中…</div>
   </div>
+
+  <!-- K 线图 -->
+  <div class="card p-3" data-code="{{ code }}">
+    <div id="kline-chart" style="width: 100%; height: 460px;"></div>
+    <div id="kline-empty" class="hidden p-10 text-center text-gray-500 text-sm">K 线数据不可用</div>
+    <script>
+    (function(){
+      const container = document.currentScript.closest('[data-code]');
+      const code = container.dataset.code;
+      const chartEl = container.querySelector('#kline-chart');
+      const emptyEl = container.querySelector('#kline-empty');
+      const chart = echarts.init(chartEl, 'dark', {renderer: 'canvas'});
+      chart.showLoading('default', {
+        text: '加载中…', color: '#ef4444', textColor: '#94a3b8',
+        maskColor: 'rgba(11,18,32,0.7)'
+      });
+
+      fetch('/api/kline/' + code)
+        .then(r => r.json())
+        .then(d => {
+          chart.hideLoading();
+          if (d.error) {
+            chartEl.style.display = 'none';
+            emptyEl.classList.remove('hidden');
+            return;
+          }
+          const upColor = '#ef4444';    // A股：红涨
+          const downColor = '#22c55e';  // 绿跌
+          const opt = {
+            backgroundColor: 'transparent',
+            animation: false,
+            legend: {
+              top: 6,
+              textStyle: {color: '#94a3b8', fontSize: 11},
+              data: ['K', 'MA5', 'MA10', 'MA20', 'MA60']
+            },
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: {type: 'cross'},
+              backgroundColor: '#111827',
+              borderColor: '#1f2937',
+              textStyle: {color: '#e5e7eb', fontSize: 12}
+            },
+            axisPointer: {link: [{xAxisIndex: 'all'}]},
+            grid: [
+              {left: 60, right: 20, top: 40, height: 260},
+              {left: 60, right: 20, top: 320, height: 90}
+            ],
+            xAxis: [
+              {
+                type: 'category', data: d.dates, boundaryGap: false,
+                axisLine: {lineStyle: {color: '#374151'}},
+                axisLabel: {color: '#94a3b8', fontSize: 10},
+                splitLine: {show: false}
+              },
+              {
+                type: 'category', gridIndex: 1, data: d.dates,
+                boundaryGap: false, axisLine: {lineStyle: {color: '#374151'}},
+                axisLabel: {show: false}, splitLine: {show: false}
+              }
+            ],
+            yAxis: [
+              {
+                scale: true,
+                axisLabel: {color: '#94a3b8', fontSize: 10},
+                splitLine: {lineStyle: {color: '#1f2937'}}
+              },
+              {
+                scale: true, gridIndex: 1,
+                axisLabel: {color: '#94a3b8', fontSize: 10},
+                splitLine: {show: false}, splitNumber: 2
+              }
+            ],
+            dataZoom: [
+              {type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100},
+              {
+                type: 'slider', xAxisIndex: [0, 1], top: 425, height: 20,
+                borderColor: '#374151',
+                textStyle: {color: '#94a3b8', fontSize: 10},
+                start: 60, end: 100
+              }
+            ],
+            series: [
+              {
+                name: 'K', type: 'candlestick', data: d.ohlc,
+                itemStyle: {
+                  color: upColor, color0: downColor,
+                  borderColor: upColor, borderColor0: downColor
+                }
+              },
+              {name: 'MA5', type: 'line', data: d.ma5, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#fbbf24'}, z: 3},
+              {name: 'MA10', type: 'line', data: d.ma10, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#f472b6'}, z: 3},
+              {name: 'MA20', type: 'line', data: d.ma20, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#60a5fa'}, z: 3},
+              {name: 'MA60', type: 'line', data: d.ma60, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#a78bfa'}, z: 3},
+              {
+                name: '量', type: 'bar',
+                xAxisIndex: 1, yAxisIndex: 1,
+                data: d.volumes.map((v, i) => ({
+                  value: v,
+                  itemStyle: {
+                    color: d.ohlc[i][1] >= d.ohlc[i][0] ? upColor : downColor,
+                    opacity: 0.7
+                  }
+                }))
+              }
+            ]
+          };
+          chart.setOption(opt);
+        })
+        .catch(err => {
+          chart.hideLoading();
+          chartEl.style.display = 'none';
+          emptyEl.classList.remove('hidden');
+          emptyEl.textContent = '加载失败: ' + err.message;
+        });
+
+      window.addEventListener('resize', () => chart.resize());
+    })();
+    </script>
+  </div>
+
+  <!-- AI 分析（流式） -->
   <div id="analyze-result"
        hx-post="/analyze/{{ code }}/run"
        hx-trigger="load"
        hx-target="this"
-       hx-swap="innerHTML"
-       hx-indicator="#analyze-loading">
-    <div class="card p-8 text-center text-gray-500 text-sm">正在加载数据 + 调用 AI…</div>
+       hx-swap="innerHTML">
+    <div class="card p-8 text-center text-gray-500 text-sm">正在准备 AI 分析…</div>
   </div>
 </div>
 {% endblock %}

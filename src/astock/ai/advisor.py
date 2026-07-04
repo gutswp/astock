@@ -129,6 +129,18 @@ def _build_context(config: AppConfig, console: Console) -> str:
     return "\n".join(parts)
 
 
+def _save_advise(advice: str, context: str) -> str:
+    today = datetime.now().strftime("%Y-%m-%d")
+    reports_dir = DATA_DIR / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    out_path = reports_dir / f"{today}.advise.md"
+    out_path.write_text(
+        f"# AStock AI 决策报告 {today}\n\n{advice}\n\n---\n\n<details><summary>决策上下文</summary>\n\n{context}\n\n</details>\n",
+        encoding="utf-8",
+    )
+    return str(out_path)
+
+
 def generate_advise(config: AppConfig, console: Console | None = None) -> tuple[str, str]:
     """执行决策报告生成，返回 (advice_markdown, saved_path_str)."""
     console = console or Console(quiet=True)
@@ -142,16 +154,34 @@ def generate_advise(config: AppConfig, console: Console | None = None) -> tuple[
         messages=[{"role": "user", "content": context}],
     )
     advice = response.content[0].text
+    path = _save_advise(advice, context)
+    return advice, path
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    reports_dir = DATA_DIR / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    out_path = reports_dir / f"{today}.advise.md"
-    out_path.write_text(
-        f"# AStock AI 决策报告 {today}\n\n{advice}\n\n---\n\n<details><summary>决策上下文</summary>\n\n{context}\n\n</details>\n",
-        encoding="utf-8",
-    )
-    return advice, str(out_path)
+
+def stream_advise(config: AppConfig):
+    """流式生成决策：yield (event_type, data)。event_type ∈ {stage, chunk, done, error}."""
+    try:
+        yield ("stage", "拉取持仓 / 大盘 / 板块 / 机会池")
+        context = _build_context(config, Console(quiet=True))
+        yield ("stage", "调用 AI 生成决策")
+
+        client = make_client()
+        buf = []
+        with client.messages.stream(
+            model=config.ai_model,
+            max_tokens=max(config.ai_max_tokens, 4000),
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": context}],
+        ) as stream:
+            for text in stream.text_stream:
+                buf.append(text)
+                yield ("chunk", text)
+
+        advice = "".join(buf)
+        path = _save_advise(advice, context)
+        yield ("done", path)
+    except Exception as e:
+        yield ("error", str(e))
 
 
 def run_advise(config: AppConfig) -> None:

@@ -1,0 +1,42 @@
+<div class="card p-6" data-stream-url="{{ stream_url }}">
+  <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-800">
+    <div class="font-semibold">{{ title }}</div>
+    <div id="stream-status" class="text-xs text-gray-500 flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-up animate-pulse"></span>
+      <span id="stream-stage">连接中…</span>
+    </div>
+  </div>
+
+  <div class="markdown text-sm text-gray-200 leading-7" id="stream-output"></div>
+
+  <script>
+  (function(){
+    const container = document.currentScript.closest('[data-stream-url]');
+    const url = container.dataset.streamUrl;
+    const out = container.querySelector('#stream-output');
+    const stage = container.querySelector('#stream-stage');
+    const status = container.querySelector('#stream-status');
+    let buf = '';
+    const src = new EventSource(url);
+
+    src.addEventListener('stage', e => {
+      stage.textContent = e.data;
+    });
+    src.addEventListener('chunk', e => {
+      buf += e.data;
+      out.innerHTML = marked.parse(buf);
+    });
+    src.addEventListener('done', e => {
+      src.close();
+      status.innerHTML = e.data
+        ? '<span class="text-green-400">✓ 已保存 </span><code class="text-gray-400 text-[10px]">' + e.data.split('/').pop() + '</code>'
+        : '<span class="text-green-400">✓ 完成</span>';
+    });
+    src.addEventListener('error', e => {
+      src.close();
+      const msg = (e.data || '').trim() || '连接中断';
+      status.innerHTML = '<span class="text-up">✗ ' + msg + '</span>';
+    });
+  })();
+  </script>
+</div>

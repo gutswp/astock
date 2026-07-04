@@ -9,6 +9,7 @@ from astock.config import load_config
 from astock.web.routes import (
     ai as ai_routes,
     alerts as alerts_routes,
+    api as api_routes,
     dashboard as dashboard_routes,
     journal as journal_routes,
     scan as scan_routes,
@@ -33,6 +34,7 @@ app.include_router(trade_routes.router)
 app.include_router(journal_routes.router)
 app.include_router(scan_routes.router)
 app.include_router(alerts_routes.router)
+app.include_router(api_routes.router)
 
 
 @app.get("/health")

@@ -85,6 +85,29 @@ def generate_analysis(code: str, config: AppConfig) -> str:
     return response.content[0].text
 
 
+def stream_analysis(code: str, config: AppConfig):
+    """流式单股分析。yield (event, data)。"""
+    try:
+        code = code.zfill(6)
+        yield ("stage", f"拉取 {code} 行情 + 日线 + 新闻")
+        context = _build_stock_context(code, config)
+        yield ("stage", "调用 AI 分析")
+
+        client = make_client()
+        with client.messages.stream(
+            model=config.ai_model,
+            max_tokens=config.ai_max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"请分析以下股票:\n\n{context}"}],
+        ) as stream:
+            for text in stream.text_stream:
+                yield ("chunk", text)
+
+        yield ("done", "")
+    except Exception as e:
+        yield ("error", str(e))
+
+
 def analyze_stock(code: str, config: AppConfig) -> None:
     console = Console(width=100)
     code = code.zfill(6)

@@ -15,6 +15,7 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "markdown>=3.5",
+    "sse-starlette>=2.1",
 ]
 
 [project.scripts]

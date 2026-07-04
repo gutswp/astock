@@ -98,26 +98,42 @@ def _raw_trades_table(trades: list[dict], limit: int = 40) -> str:
     return "\n".join(lines)
 
 
-def generate_review(config: AppConfig, days: int = 90) -> tuple[str, str] | None:
-    """执行复盘，返回 (review_markdown, saved_path_str)。没有交易记录时返回 None."""
+def _build_review_context(days: int) -> str | None:
     trades = load_trades(days=days)
     if not trades:
         return None
-
     codes = sorted({t["code"] for t in trades})
     spot = get_spot(codes) if codes else None
     current_spot: dict[str, float] = {}
     if spot is not None and not spot.empty:
         for _, r in spot.iterrows():
             current_spot[str(r["代码"]).zfill(6)] = float(r["最新价"])
-
-    context = (
+    return (
         f"# 最近 {days} 天交易复盘数据\n\n"
         "## 按标的汇总\n\n"
         f"{_summarize_trades(trades, current_spot)}\n\n"
         "## 原始交易流水（最近 40 笔）\n\n"
         f"{_raw_trades_table(trades)}\n"
     )
+
+
+def _save_review(review: str, days: int, context: str) -> str:
+    today = datetime.now().strftime("%Y-%m-%d")
+    out_dir = DATA_DIR / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{today}.review.md"
+    out_path.write_text(
+        f"# AStock AI 复盘 {today}（回看 {days} 天）\n\n{review}\n\n---\n\n<details><summary>数据</summary>\n\n{context}\n\n</details>\n",
+        encoding="utf-8",
+    )
+    return str(out_path)
+
+
+def generate_review(config: AppConfig, days: int = 90) -> tuple[str, str] | None:
+    """执行复盘，返回 (review_markdown, saved_path_str)。没有交易记录时返回 None."""
+    context = _build_review_context(days)
+    if context is None:
+        return None
 
     client = make_client()
     response = client.messages.create(
@@ -127,16 +143,37 @@ def generate_review(config: AppConfig, days: int = 90) -> tuple[str, str] | None
         messages=[{"role": "user", "content": context}],
     )
     review = response.content[0].text
+    path = _save_review(review, days, context)
+    return review, path
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    out_dir = DATA_DIR / "reports"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{today}.review.md"
-    out_path.write_text(
-        f"# AStock AI 复盘 {today}（回看 {days} 天）\n\n{review}\n\n---\n\n<details><summary>数据</summary>\n\n{context}\n\n</details>\n",
-        encoding="utf-8",
-    )
-    return review, str(out_path)
+
+def stream_review(config: AppConfig, days: int = 90):
+    """流式复盘。yield (event, data)。"""
+    try:
+        yield ("stage", f"读取最近 {days} 天交易 + 拉价格")
+        context = _build_review_context(days)
+        if context is None:
+            yield ("error", "暂无交易记录，等你记几笔再来。")
+            return
+        yield ("stage", "调用 AI 复盘")
+
+        client = make_client()
+        buf = []
+        with client.messages.stream(
+            model=config.ai_model,
+            max_tokens=max(config.ai_max_tokens, 3500),
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": context}],
+        ) as stream:
+            for text in stream.text_stream:
+                buf.append(text)
+                yield ("chunk", text)
+
+        review = "".join(buf)
+        path = _save_review(review, days, context)
+        yield ("done", path)
+    except Exception as e:
+        yield ("error", str(e))
 
 
 def run_review(config: AppConfig, days: int = 90) -> None:
