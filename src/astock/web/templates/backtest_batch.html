@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-semibold">批量回测</h1>
+    <a href="/tools/backtest" class="text-xs text-blue-400 hover:underline">← 单只回测</a>
+  </div>
+  <p class="text-xs text-gray-500">在多只标的上跑同一策略，看策略是否普适。上限 30 只。</p>
+
+  <form method="post" action="/tools/backtest/batch" class="card p-4 space-y-4">
+    {% if holdings %}
+    <div>
+      <div class="text-xs text-gray-400 mb-2">持仓中挑选：</div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {% for h in holdings %}
+        <label class="flex items-center gap-2 text-sm p-1.5 rounded hover:bg-gray-800 cursor-pointer">
+          <input type="checkbox" name="codes" value="{{ h.code }}"
+                 {% if picked_codes and h.code in picked_codes %}checked{% endif %} class="accent-red-500">
+          <span class="text-xs">{{ h.name }}</span>
+          <span class="font-mono text-xs text-gray-500">{{ h.code }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">或手工填代码（逗号/换行）</label>
+      <textarea name="custom" rows="2"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white font-mono text-sm"></textarea>
+    </div>
+    <div class="flex items-end gap-3 flex-wrap">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">策略</label>
+        <select name="strategy" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-56">
+          {% for key, label in strategies.items() %}
+          <option value="{{ key }}" {% if key == strategy %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">持有天数</label>
+        <select name="hold_days" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-20">
+          {% for n in [3, 5, 10, 20] %}<option value="{{ n }}" {% if n == hold_days %}selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">回看 K 数</label>
+        <select name="days" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-24">
+          {% for n in [120, 250, 500, 1000] %}<option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">跑批量</button>
+    </div>
+  </form>
+
+  {% if results is not none %}
+    {% if agg.count %}
+    <div class="card p-6">
+      <div class="font-semibold mb-3">聚合</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div><div class="kpi-label">标的数</div><div class="kpi-value">{{ agg.count }}</div></div>
+        <div><div class="kpi-label">总交易样本</div><div class="kpi-value">{{ agg.total_trades }}</div></div>
+        <div><div class="kpi-label">平均胜率</div><div class="kpi-value">{{ agg.avg_win_rate }}%</div></div>
+        <div><div class="kpi-label">样本加权平均收益</div>
+          <div class="kpi-value {% if agg.sample_weighted_avg_return > 0 %}pos{% elif agg.sample_weighted_avg_return < 0 %}neg{% endif %}">
+            {{ "%+.2f"|format(agg.sample_weighted_avg_return) }}%
+          </div>
+        </div>
+        <div><div class="kpi-label">正收益标的</div><div class="kpi-value">{{ agg.codes_positive }} / {{ agg.count }}</div></div>
+      </div>
+    </div>
+
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+        <div class="font-semibold">逐只结果</div>
+        <div class="text-xs text-gray-500">按平均收益排序</div>
+      </div>
+      <table class="data">
+        <thead>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th class="text-right">样本</th>
+            <th class="text-right">胜率</th>
+            <th class="text-right">平均收益</th>
+            <th class="text-right">累计</th>
+            <th class="text-right">最佳</th>
+            <th class="text-right">最差</th>
+            <th class="text-right">→ 凯利</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in results|sort(attribute="avg_return", reverse=true) %}
+          <tr>
+            <td class="font-mono text-xs">{{ r.code }}</td>
+            <td>{{ r.name or r.code }}</td>
+            <td class="text-right num">{{ r.trades|length }}</td>
+            <td class="text-right num">{{ r.win_rate }}%</td>
+            <td class="text-right num {% if r.avg_return > 0 %}pos{% elif r.avg_return < 0 %}neg{% endif %}">
+              {{ "%+.2f"|format(r.avg_return) }}%
+            </td>
+            <td class="text-right num {% if r.total_return > 0 %}pos{% elif r.total_return < 0 %}neg{% endif %}">
+              {{ "%+.2f"|format(r.total_return) }}%
+            </td>
+            <td class="text-right num pos">{{ "%+.2f"|format(r.best_return) }}%</td>
+            <td class="text-right num neg">{{ "%+.2f"|format(r.worst_return) }}%</td>
+            <td class="text-right">
+              {% if r.trades and r.avg_win > 0 and r.avg_loss > 0 %}
+              <a href="/tools/sizing?mode=kelly&code={{ r.code }}&win_rate={{ r.win_rate }}&avg_win={{ r.avg_win }}&avg_loss={{ r.avg_loss }}"
+                 class="text-blue-400 hover:underline text-xs">用于凯利 →</a>
+              {% else %}
+              <span class="text-gray-600 text-xs">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card p-8 text-center text-gray-500 text-sm">
+      没有有效样本。可能是选中的代码历史数据不足，或策略太严格。
+    </div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

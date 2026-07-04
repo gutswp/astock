@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 from rich.console import Console
@@ -207,35 +209,56 @@ def scan(
         progress_cb("技术面分析", 0, total)
 
     results = []
+    results_lock = threading.Lock()
+    counter = {"done": 0}
+    counter_lock = threading.Lock()
 
-    def _record_hit(row, signals, vol_ratio):
-        results.append({
-            "code": row["代码"], "name": row["名称"], "price": row["最新价"],
-            "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
-            "signals": signals, "score": _score(signals),
-        })
+    def _worker(row_tuple):
+        if should_stop and should_stop():
+            return None
+        _, row = row_tuple
+        signals, vol_ratio = _scan_stock(row["代码"], config)
+        if signals:
+            hit = {
+                "code": row["代码"], "name": row["名称"], "price": row["最新价"],
+                "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
+                "signals": signals, "score": _score(signals),
+            }
+            with results_lock:
+                results.append(hit)
+        with counter_lock:
+            counter["done"] += 1
+            done_now = counter["done"]
+        return done_now
+
+    max_workers = min(8, total) if total > 0 else 1
+    rows = list(candidates.iterrows())
 
     if silent:
-        for i, (_, row) in enumerate(candidates.iterrows(), start=1):
-            if should_stop and should_stop():
-                break
-            signals, vol_ratio = _scan_stock(row["代码"], config)
-            if signals:
-                _record_hit(row, signals, vol_ratio)
-            if progress_cb and i % 5 == 0:
-                progress_cb("技术面分析", i, total)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_worker, r) for r in rows]
+            for fut in as_completed(futures):
+                done = fut.result()
+                if progress_cb and done and done % 5 == 0:
+                    progress_cb("技术面分析", done, total)
+                if should_stop and should_stop():
+                    for f in futures:
+                        f.cancel()
+                    break
     else:
         with Progress(console=console) as progress:
             task = progress.add_task("扫描中...", total=total)
-            for i, (_, row) in enumerate(candidates.iterrows(), start=1):
-                if should_stop and should_stop():
-                    break
-                signals, vol_ratio = _scan_stock(row["代码"], config)
-                if signals:
-                    _record_hit(row, signals, vol_ratio)
-                progress.advance(task)
-                if progress_cb and i % 5 == 0:
-                    progress_cb("技术面分析", i, total)
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [ex.submit(_worker, r) for r in rows]
+                for fut in as_completed(futures):
+                    done = fut.result()
+                    progress.advance(task)
+                    if progress_cb and done and done % 5 == 0:
+                        progress_cb("技术面分析", done, total)
+                    if should_stop and should_stop():
+                        for f in futures:
+                            f.cancel()
+                        break
 
     if progress_cb:
         progress_cb("完成", total, total)

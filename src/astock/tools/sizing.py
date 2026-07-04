@@ -1,4 +1,4 @@
-"""仓位建议器：基于止损位的风险控制."""
+"""仓位建议器：基于止损位的风险控制 + 凯利公式两种模式."""
 from dataclasses import dataclass
 
 
@@ -54,5 +54,67 @@ def compute(inp: SizingInput) -> SizingResult:
         position_value=round(position_value, 2),
         position_pct=round(position_pct, 2),
         risk_reward=round(rr, 2) if rr is not None else None,
+        warning=warning,
+    )
+
+
+# --- 凯利模式 -----------------------------------------------------------------
+
+@dataclass
+class KellyInput:
+    capital: float          # 总资金
+    entry_price: float
+    win_rate: float         # % (0~100)
+    avg_win: float          # % 平均单笔盈利（正数）
+    avg_loss: float         # % 平均单笔亏损（正数）
+    fraction: float = 0.25  # 分数凯利，避免用满
+
+
+@dataclass
+class KellyResult:
+    full_kelly_pct: float       # 满仓凯利占资金 %
+    fraction_used: float        # 采用的凯利分数
+    kelly_pct: float            # 分数凯利后的建议仓位 %
+    kelly_amount: float         # 建议投入金额
+    shares: int                 # 建议手数（100 整数）
+    warning: str | None = None
+
+
+def kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """标准凯利公式 f* = (bp - q) / b，返回小数（0~1，可能为负）."""
+    if avg_loss <= 0 or avg_win <= 0:
+        return 0.0
+    p = win_rate / 100
+    q = 1 - p
+    b = avg_win / avg_loss
+    return (b * p - q) / b
+
+
+def compute_kelly(inp: KellyInput) -> KellyResult:
+    if inp.capital <= 0 or inp.entry_price <= 0:
+        return KellyResult(0, inp.fraction, 0, 0, 0, "参数无效")
+
+    f = kelly_fraction(inp.win_rate, inp.avg_win, inp.avg_loss)
+    warning: str | None = None
+    if f <= 0:
+        warning = "凯利公式返回 ≤0：期望值为负，不建议做这个策略。"
+        return KellyResult(round(f * 100, 2), inp.fraction, 0, 0, 0, warning)
+
+    fraction = max(0.05, min(inp.fraction, 1.0))  # 限制在 5%~100%
+    kelly_pct = f * fraction
+    if kelly_pct > 0.5:
+        warning = "分数凯利后仍超 50% 资金，风险偏大。可考虑更小分数（如 0.1）。"
+    amount = inp.capital * kelly_pct
+    raw_shares = amount / inp.entry_price
+    shares = (int(raw_shares) // 100) * 100
+    if shares == 0:
+        warning = warning or "按此仓位不足 100 股，可加大分数或增加资金。"
+
+    return KellyResult(
+        full_kelly_pct=round(f * 100, 2),
+        fraction_used=fraction,
+        kelly_pct=round(kelly_pct * 100, 2),
+        kelly_amount=round(amount, 2),
+        shares=shares,
         warning=warning,
     )

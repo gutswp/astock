@@ -50,6 +50,9 @@ class BacktestResult:
     total_return: float
     best_return: float
     worst_return: float
+    name: str = ""       # 显示名，可空
+    avg_win: float = 0.0  # 平均盈利单笔 % （凯利用）
+    avg_loss: float = 0.0  # 平均亏损单笔 %（绝对值，凯利用）
 
 
 def _signal_indices(closes: pd.Series, highs: pd.Series, lows: pd.Series,
@@ -162,9 +165,10 @@ def run(code: str, strategy: str, hold_days: int = 5, days: int = 250) -> Backte
             best_return=0, worst_return=0,
         )
 
-    wins = sum(1 for t in trades if t.return_pct > 0)
+    wins_list = [t.return_pct for t in trades if t.return_pct > 0]
+    losses_list = [-t.return_pct for t in trades if t.return_pct < 0]  # 取正
+    wins = len(wins_list)
     avg = sum(t.return_pct for t in trades) / len(trades)
-    # 假设每次全仓（可比性用）
     total = 1.0
     for t in trades:
         total *= (1 + t.return_pct / 100)
@@ -180,4 +184,50 @@ def run(code: str, strategy: str, hold_days: int = 5, days: int = 250) -> Backte
         total_return=round(total_return, 2),
         best_return=round(best, 2),
         worst_return=round(worst, 2),
+        avg_win=round(sum(wins_list) / len(wins_list), 2) if wins_list else 0.0,
+        avg_loss=round(sum(losses_list) / len(losses_list), 2) if losses_list else 0.0,
     )
+
+
+def run_batch(codes: list[str], strategy: str, hold_days: int = 5,
+              days: int = 250) -> list[BacktestResult]:
+    """并发跑多个 code。返回按 code 顺序的结果列表（跳过没结果的）."""
+    from concurrent.futures import ThreadPoolExecutor
+    results: list[BacktestResult] = []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(run, c, strategy, hold_days, days): c for c in codes}
+        for c, fut in zip(codes, [None] * len(codes)):
+            pass  # placeholder
+        # 按 code 原顺序回收
+        rmap: dict[str, BacktestResult] = {}
+        for fut, code in futures.items():
+            try:
+                r = fut.result()
+            except Exception:
+                r = None
+            if r is not None:
+                rmap[code] = r
+    for c in codes:
+        if c in rmap:
+            results.append(rmap[c])
+    return results
+
+
+def aggregate(results: list[BacktestResult]) -> dict:
+    """跨股票聚合：平均胜率、平均单笔收益、总样本、样本加权收益."""
+    if not results:
+        return {"count": 0, "total_trades": 0, "avg_win_rate": 0,
+                "sample_weighted_avg_return": 0, "codes_positive": 0}
+    total_trades = sum(len(r.trades) for r in results)
+    win_rates = [r.win_rate for r in results if r.trades]
+    avg_win_rate = sum(win_rates) / len(win_rates) if win_rates else 0
+    weighted = sum(r.avg_return * len(r.trades) for r in results if r.trades)
+    weighted_avg = weighted / total_trades if total_trades else 0
+    codes_positive = sum(1 for r in results if r.avg_return > 0)
+    return {
+        "count": len(results),
+        "total_trades": total_trades,
+        "avg_win_rate": round(avg_win_rate, 2),
+        "sample_weighted_avg_return": round(weighted_avg, 2),
+        "codes_positive": codes_positive,
+    }

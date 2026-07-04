@@ -2,7 +2,10 @@
 {% from "_macros.html" import pct %}
 {% block content %}
 <div class="space-y-4">
-  <h1 class="text-xl font-semibold">信号回测</h1>
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-semibold">信号回测</h1>
+    <a href="/tools/backtest/batch" class="text-xs text-blue-400 hover:underline">批量模式 →</a>
+  </div>
   <p class="text-xs text-gray-500">在历史 K 线上找信号触发日，模拟每次买入并持有 N 天卖出，统计胜率与平均收益。样本越多越有意义。</p>
 
   <form method="post" action="/tools/backtest" class="card p-4 flex items-end gap-3 flex-wrap">

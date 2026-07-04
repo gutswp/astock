@@ -195,11 +195,16 @@ def calc_sar(highs: pd.Series, lows: pd.Series,
     for i in range(1, n):
         prev_sar = sar.iloc[i - 1]
         h_i, l_i = float(highs.iloc[i]), float(lows.iloc[i])
+        # 前两根低/高的约束（多头 SAR 不能高于前 2 日最低；空头相反）
+        prev_low_2 = min(float(lows.iloc[i - 1]),
+                         float(lows.iloc[i - 2]) if i >= 2 else float(lows.iloc[i - 1]))
+        prev_high_2 = max(float(highs.iloc[i - 1]),
+                          float(highs.iloc[i - 2]) if i >= 2 else float(highs.iloc[i - 1]))
         if up:
             cur = prev_sar + af * (ep - prev_sar)
-            cur = min(cur, float(lows.iloc[i - 1]), l_i if i >= 2 else float(lows.iloc[i - 1]))
+            cur = min(cur, prev_low_2)
             if l_i < cur:
-                # 反转
+                # 反转为空头
                 up = False
                 cur = ep  # 新 SAR 是原 EP
                 ep = l_i
@@ -210,7 +215,7 @@ def calc_sar(highs: pd.Series, lows: pd.Series,
                     af = min(af + af_step, af_max)
         else:
             cur = prev_sar + af * (ep - prev_sar)
-            cur = max(cur, float(highs.iloc[i - 1]), h_i if i >= 2 else float(highs.iloc[i - 1]))
+            cur = max(cur, prev_high_2)
             if h_i > cur:
                 up = True
                 cur = ep

@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from astock.data.provider import get_hist, get_spot
+from astock.screen.indicators import calc_bollinger, calc_sar
 
 router = APIRouter(prefix="/api")
 
@@ -68,6 +69,35 @@ async def kline(code: str, days: int = 120):
     volumes = [int(v) for v in df["成交量"].tolist()]
     closes = [float(c) for c in df["收盘"].tolist()]
 
+    import pandas as pd
+    closes_s = pd.Series(closes)
+    highs_s = pd.Series([float(h) for h in df["最高"].tolist()])
+    lows_s = pd.Series([float(l) for l in df["最低"].tolist()])
+
+    upper, mid, lower = calc_bollinger(closes_s, period=20)
+    sar_s, trend_s = calc_sar(highs_s, lows_s)
+
+    def _clean(series):
+        return [None if pd.isna(v) else round(float(v), 3) for v in series]
+
+    def _sar_split(sar_series, trend_series):
+        """把 SAR 拆成"多头下方"和"空头上方"两组，便于用不同符号绘制."""
+        up_pts: list = []
+        down_pts: list = []
+        for v, t in zip(sar_series, trend_series):
+            if pd.isna(v) or t == 0:
+                up_pts.append(None)
+                down_pts.append(None)
+            elif t == 1:  # 多头，SAR 在下方
+                up_pts.append(round(float(v), 3))
+                down_pts.append(None)
+            else:  # 空头，SAR 在上方
+                up_pts.append(None)
+                down_pts.append(round(float(v), 3))
+        return up_pts, down_pts
+
+    sar_up, sar_down = _sar_split(sar_s, trend_s)
+
     return JSONResponse({
         "code": code,
         "dates": dates,
@@ -77,4 +107,9 @@ async def kline(code: str, days: int = 120):
         "ma10": _ma(closes, 10),
         "ma20": _ma(closes, 20),
         "ma60": _ma(closes, 60),
+        "boll_upper": _clean(upper),
+        "boll_mid": _clean(mid),
+        "boll_lower": _clean(lower),
+        "sar_up": sar_up,      # 多头形态：SAR 在 K 线下方
+        "sar_down": sar_down,  # 空头形态：SAR 在 K 线上方
     })

@@ -1,15 +1,111 @@
 {% extends "base.html" %}
-{% from "_macros.html" import money, pct %}
+{% from "_macros.html" import money %}
 {% block content %}
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-  <div class="md:col-span-2 lg:col-span-2 space-y-4">
-    <h1 class="text-xl font-semibold">仓位建议器</h1>
+  <div class="lg:col-span-2 space-y-4">
+    <div class="flex items-center gap-3">
+      <h1 class="text-xl font-semibold">仓位建议器</h1>
+      <div class="flex gap-1 text-xs">
+        <a href="/tools/sizing?mode=risk" class="px-3 py-1 rounded {% if mode == 'risk' %}bg-up text-white{% else %}bg-gray-800 text-gray-300{% endif %}">风险控制</a>
+        <a href="/tools/sizing?mode=kelly" class="px-3 py-1 rounded {% if mode == 'kelly' %}bg-up text-white{% else %}bg-gray-800 text-gray-300{% endif %}">凯利公式</a>
+      </div>
+    </div>
+
+    {% if mode == 'kelly' %}
+    <p class="text-xs text-gray-500">凯利公式：<code>f* = (b·p − q) / b</code>，其中 <code>p</code>=胜率、<code>b</code>=平均盈亏比。建议用 0.25 分数凯利，避免波动过大爆仓。参数可从批量回测的结果里带过来。</p>
+
+    <form method="post" action="/tools/sizing/kelly" class="card p-6 space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">股票代码（可选）</label>
+          <input name="code" value="{{ code or '' }}" pattern="\d{6}" maxlength="6"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white font-mono"
+                 hx-get="/api/lookup" hx-trigger="input changed delay:400ms"
+                 hx-target="#kelly-name" hx-swap="innerHTML" hx-include="this">
+          <div id="kelly-name" class="text-xs mt-1">{{ name or '' }}</div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">总资金（元）</label>
+          <input type="number" name="capital" required min="100" step="100"
+                 value="{{ kelly_inp.capital if kelly_inp else 100000 }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">入场价</label>
+          <input type="number" name="entry_price" required min="0.01" step="0.01"
+                 value="{{ kelly_inp.entry_price if kelly_inp else '' }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">凯利分数（0.05 ~ 1.0）</label>
+          <input type="number" name="fraction" required min="0.05" max="1.0" step="0.05"
+                 value="{{ kelly_inp.fraction if kelly_inp else 0.25 }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+          <div class="text-xs text-gray-500 mt-1">保守 0.1 · 常用 0.25 · 激进 0.5</div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">胜率 %</label>
+          <input type="number" name="win_rate" required min="0.01" max="99.99" step="0.01"
+                 value="{{ prefill_win_rate if prefill_win_rate else '' }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">平均单笔盈利 %</label>
+          <input type="number" name="avg_win" required min="0.01" step="0.01"
+                 value="{{ prefill_avg_win if prefill_avg_win else '' }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">平均单笔亏损 %（正数）</label>
+          <input type="number" name="avg_loss" required min="0.01" step="0.01"
+                 value="{{ prefill_avg_loss if prefill_avg_loss else '' }}"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+      </div>
+      <div class="flex justify-end pt-2 border-t border-gray-800">
+        <button type="submit" class="btn btn-primary">计算凯利仓位</button>
+      </div>
+    </form>
+
+    {% if kelly_result %}
+    <div class="card p-6 space-y-4">
+      <div class="font-semibold">建议</div>
+      {% if kelly_result.warning %}
+      <div class="text-yellow-400 text-sm">⚠️ {{ kelly_result.warning }}</div>
+      {% endif %}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <div class="kpi-label">满仓凯利</div>
+          <div class="kpi-value {% if kelly_result.full_kelly_pct > 0 %}pos{% else %}neg{% endif %}">
+            {{ kelly_result.full_kelly_pct }}%
+          </div>
+          <div class="text-xs text-gray-500 mt-1">占总资金比例</div>
+        </div>
+        <div>
+          <div class="kpi-label">分数凯利仓位</div>
+          <div class="kpi-value">{{ kelly_result.kelly_pct }}%</div>
+          <div class="text-xs text-gray-500 mt-1">× {{ kelly_result.fraction_used }} 分数</div>
+        </div>
+        <div>
+          <div class="kpi-label">投入金额</div>
+          <div class="kpi-value">{{ money(kelly_result.kelly_amount) }}</div>
+        </div>
+        <div>
+          <div class="kpi-label">建议手数</div>
+          <div class="kpi-value">{{ kelly_result.shares }}</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    {# risk mode #}
     <p class="text-xs text-gray-500">给定风险偏好和止损位，反推建议手数。核心公式：<code>手数 = 总资金 × 风险% ÷ (入场 − 止损)</code>，向下取到 100 整数手。</p>
 
     <form method="post" action="/tools/sizing" class="card p-6 space-y-4">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label class="block text-xs text-gray-400 mb-1">股票代码（可选，仅显示名称）</label>
+          <label class="block text-xs text-gray-400 mb-1">股票代码（可选）</label>
           <input name="code" value="{{ code or '' }}" pattern="\d{6}" maxlength="6"
                  class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white font-mono"
                  hx-get="/api/lookup" hx-trigger="input changed delay:400ms"
@@ -41,7 +137,7 @@
                  class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
         </div>
         <div>
-          <label class="block text-xs text-gray-400 mb-1">目标价（可选，用于计算盈亏比）</label>
+          <label class="block text-xs text-gray-400 mb-1">目标价（可选）</label>
           <input type="number" name="target_price" min="0.01" step="0.01"
                  value="{{ inp.target_price if inp and inp.target_price else '' }}"
                  class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
@@ -59,42 +155,36 @@
       <div class="text-yellow-400 text-sm">⚠️ {{ result.warning }}</div>
       {% endif %}
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div>
-          <div class="kpi-label">建议手数</div>
-          <div class="kpi-value">{{ result.shares }}</div>
-          <div class="text-xs text-gray-500 mt-1">未取整 {{ result.raw_shares }}</div>
-        </div>
-        <div>
-          <div class="kpi-label">入场市值</div>
-          <div class="kpi-value">{{ money(result.position_value) }}</div>
-          <div class="text-xs text-gray-500 mt-1">占比 {{ result.position_pct }}%</div>
-        </div>
-        <div>
-          <div class="kpi-label">最大风险</div>
-          <div class="kpi-value">{{ money(result.max_risk_amount) }}</div>
-          <div class="text-xs text-gray-500 mt-1">单股亏损 {{ result.loss_per_share }}</div>
-        </div>
-        <div>
-          <div class="kpi-label">盈亏比</div>
-          <div class="kpi-value">
-            {% if result.risk_reward %}{{ result.risk_reward }}:1{% else %}<span class="text-gray-600">—</span>{% endif %}
-          </div>
-          <div class="text-xs text-gray-500 mt-1">目标 vs 止损</div>
-        </div>
+        <div><div class="kpi-label">建议手数</div><div class="kpi-value">{{ result.shares }}</div>
+          <div class="text-xs text-gray-500 mt-1">未取整 {{ result.raw_shares }}</div></div>
+        <div><div class="kpi-label">入场市值</div><div class="kpi-value">{{ money(result.position_value) }}</div>
+          <div class="text-xs text-gray-500 mt-1">占比 {{ result.position_pct }}%</div></div>
+        <div><div class="kpi-label">最大风险</div><div class="kpi-value">{{ money(result.max_risk_amount) }}</div>
+          <div class="text-xs text-gray-500 mt-1">单股亏损 {{ result.loss_per_share }}</div></div>
+        <div><div class="kpi-label">盈亏比</div>
+          <div class="kpi-value">{% if result.risk_reward %}{{ result.risk_reward }}:1{% else %}<span class="text-gray-600">—</span>{% endif %}</div>
+          <div class="text-xs text-gray-500 mt-1">目标 vs 止损</div></div>
       </div>
     </div>
     {% endif %}
+    {% endif %}
   </div>
 
-  <aside class="md:col-span-1 lg:col-span-1 space-y-3">
+  <aside class="lg:col-span-1 space-y-3">
     <div class="card p-5 space-y-2 text-xs text-gray-400">
       <div class="font-semibold text-white text-sm mb-1">同类工具</div>
-      <a class="block text-blue-400 hover:underline" href="/tools/backtest">→ 信号回测</a>
+      <a class="block text-blue-400 hover:underline" href="/tools/backtest">→ 信号回测（单只）</a>
+      <a class="block text-blue-400 hover:underline" href="/tools/backtest/batch">→ 批量回测（拿参数给凯利用）</a>
     </div>
     <div class="card p-5 text-xs text-gray-500 leading-6">
       <div class="font-semibold text-white text-sm mb-2">思路</div>
+      {% if mode == 'kelly' %}
+      <div>凯利公式给的是长期最优仓位，但对参数敏感。用批量回测跑够样本估计胜率和盈亏比后再套。</div>
+      <div class="mt-2">分数凯利 (0.25×full) 是实操推荐 —— 波动小、心态好、回撤可控。</div>
+      {% else %}
       <div>基于止损位反推的仓位管理是最常见的资金管理方式，比拍脑袋买固定金额更能控制回撤。</div>
-      <div class="mt-2">凯利公式需要历史胜率，回测跑够样本后再用（见回测页）。</div>
+      <div class="mt-2">凯利公式需要历史胜率，回测跑够样本后可切到凯利模式。</div>
+      {% endif %}
     </div>
   </aside>
 </div>

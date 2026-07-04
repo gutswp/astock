@@ -6,15 +6,18 @@ from urllib.parse import urlparse
 
 SINA_HEADERS = {"Referer": "https://finance.sina.com.cn"}
 
-# 节流：每个 host 最小间隔（秒），防被 eastmoney/sina 限流
+# 节流：每个 host 最小间隔（秒）。锁是全局的，会串行化跨线程调用同一 host。
+# 所以数值要保守，让并发扫描能真跑起来。eastmoney 稍严；sina 宽松。
 _MIN_INTERVAL = {
-    "push2delay.eastmoney.com": 0.12,
-    "push2his.eastmoney.com": 0.12,
-    "push2.eastmoney.com": 0.12,
-    "search-api-web.eastmoney.com": 0.2,
-    "hq.sinajs.cn": 0.05,
+    "push2delay.eastmoney.com": 0.08,
+    "push2his.eastmoney.com": 0.08,
+    "push2.eastmoney.com": 0.08,
+    "search-api-web.eastmoney.com": 0.15,
+    "hq.sinajs.cn": 0.01,
+    "money.finance.sina.com.cn": 0.01,
+    "vip.stock.finance.sina.com.cn": 0.02,
 }
-_DEFAULT_INTERVAL = 0.05
+_DEFAULT_INTERVAL = 0.02
 _last_call: dict[str, float] = {}
 _lock = threading.Lock()
 

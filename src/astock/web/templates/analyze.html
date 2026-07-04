@@ -42,7 +42,8 @@
             legend: {
               top: 6,
               textStyle: {color: '#94a3b8', fontSize: 11},
-              data: ['K', 'MA5', 'MA10', 'MA20', 'MA60']
+              data: ['K', 'MA5', 'MA10', 'MA20', 'MA60', 'BOLL上', 'BOLL中', 'BOLL下', 'SAR多', 'SAR空'],
+              selected: {'BOLL上': false, 'BOLL中': false, 'BOLL下': false, 'SAR多': false, 'SAR空': false}
             },
             tooltip: {
               trigger: 'axis',
@@ -106,6 +107,18 @@
                 lineStyle: {width: 1, color: '#60a5fa'}, z: 3},
               {name: 'MA60', type: 'line', data: d.ma60, smooth: true, symbol: 'none',
                 lineStyle: {width: 1, color: '#a78bfa'}, z: 3},
+              {name: 'BOLL上', type: 'line', data: d.boll_upper, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#64748b', type: 'dashed'}, z: 2},
+              {name: 'BOLL中', type: 'line', data: d.boll_mid, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#94a3b8', type: 'dashed'}, z: 2},
+              {name: 'BOLL下', type: 'line', data: d.boll_lower, smooth: true, symbol: 'none',
+                lineStyle: {width: 1, color: '#64748b', type: 'dashed'}, z: 2},
+              {name: 'SAR多', type: 'scatter', data: d.sar_up,
+                symbol: 'triangle', symbolSize: 6,
+                itemStyle: {color: upColor}, z: 4},
+              {name: 'SAR空', type: 'scatter', data: d.sar_down,
+                symbol: 'triangle', symbolRotate: 180, symbolSize: 6,
+                itemStyle: {color: downColor}, z: 4},
               {
                 name: '量', type: 'bar',
                 xAxisIndex: 1, yAxisIndex: 1,
