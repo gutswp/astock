@@ -154,11 +154,23 @@ def _score(signals: list[str]) -> int:
     return min(score, 100)
 
 
-def scan(config: AppConfig, silent: bool = False) -> list[dict]:
-    """核心扫描逻辑。silent=True 时不打印进度，供 advise 等其他命令复用."""
+def scan(
+    config: AppConfig,
+    silent: bool = False,
+    progress_cb=None,
+) -> list[dict]:
+    """核心扫描逻辑。
+    silent=True 时不打印进度，供 advise 等其他命令复用。
+    progress_cb: callable(stage: str, current: int, total: int) 用于 web 端进度回报。
+    """
     console = Console(quiet=silent)
+
+    if progress_cb:
+        progress_cb("拉取全市场列表", 0, 1)
     df = _get_all_stocks_sina()
     if df.empty:
+        if progress_cb:
+            progress_cb("AKShare 兜底", 0, 1)
         df = _get_all_stocks_akshare()
     if df.empty:
         if not silent:
@@ -174,33 +186,41 @@ def scan(config: AppConfig, silent: bool = False) -> list[dict]:
         (filtered["涨跌幅"] <= 8.0) &
         (filtered["成交额"] > 1e8)
     ].head(150)
+    total = len(candidates)
     if not silent:
-        console.print(f"[dim]涨幅1-8%+成交额>1亿 候选 {len(candidates)} 只，开始技术面分析...[/dim]")
+        console.print(f"[dim]涨幅1-8%+成交额>1亿 候选 {total} 只，开始技术面分析...[/dim]")
+    if progress_cb:
+        progress_cb("技术面分析", 0, total)
 
     results = []
+
+    def _record_hit(row, signals, vol_ratio):
+        results.append({
+            "code": row["代码"], "name": row["名称"], "price": row["最新价"],
+            "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
+            "signals": signals, "score": _score(signals),
+        })
+
     if silent:
-        for _, row in candidates.iterrows():
-            code = row["代码"]
-            signals, vol_ratio = _scan_stock(code, config)
+        for i, (_, row) in enumerate(candidates.iterrows(), start=1):
+            signals, vol_ratio = _scan_stock(row["代码"], config)
             if signals:
-                results.append({
-                    "code": code, "name": row["名称"], "price": row["最新价"],
-                    "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
-                    "signals": signals, "score": _score(signals),
-                })
+                _record_hit(row, signals, vol_ratio)
+            if progress_cb and i % 5 == 0:
+                progress_cb("技术面分析", i, total)
     else:
         with Progress(console=console) as progress:
-            task = progress.add_task("扫描中...", total=len(candidates))
-            for _, row in candidates.iterrows():
-                code = row["代码"]
-                signals, vol_ratio = _scan_stock(code, config)
+            task = progress.add_task("扫描中...", total=total)
+            for i, (_, row) in enumerate(candidates.iterrows(), start=1):
+                signals, vol_ratio = _scan_stock(row["代码"], config)
                 if signals:
-                    results.append({
-                        "code": code, "name": row["名称"], "price": row["最新价"],
-                        "change_pct": row["涨跌幅"], "volume_ratio": vol_ratio,
-                        "signals": signals, "score": _score(signals),
-                    })
+                    _record_hit(row, signals, vol_ratio)
                 progress.advance(task)
+                if progress_cb and i % 5 == 0:
+                    progress_cb("技术面分析", i, total)
+
+    if progress_cb:
+        progress_cb("完成", total, total)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:config.scan.max_results]

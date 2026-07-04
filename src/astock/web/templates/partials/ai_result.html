@@ -1,0 +1,13 @@
+<div class="card p-6">
+  <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-800">
+    <div class="font-semibold">{{ title }}</div>
+    {% if saved_path %}
+    <div class="text-xs text-gray-500 font-mono truncate max-w-[50%]" title="{{ saved_path }}">
+      💾 {{ saved_path.split('/')[-1] }}
+    </div>
+    {% endif %}
+  </div>
+  <div class="markdown text-sm text-gray-200 leading-7">
+    {{ html|safe }}
+  </div>
+</div>

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title|default("AStock") }} · AStock</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            up: '#ef4444',    // A股惯例：红涨
+            down: '#22c55e',  // 绿跌
+            surface: {
+              50: '#f9fafb', 100: '#f3f4f6', 800: '#1f2937', 900: '#111827', 950: '#0b1220'
+            }
+          },
+          fontFamily: {
+            sans: ['ui-sans-serif', 'system-ui', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', '"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .num { font-variant-numeric: tabular-nums; }
+    .pos { color: #ef4444; }
+    .neg { color: #22c55e; }
+    body { background: #0b1220; color: #e5e7eb; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 0.75rem; }
+    .kpi-label { color: #94a3b8; font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .kpi-value { font-size: 1.75rem; font-weight: 600; }
+    a.nav-link { color: #94a3b8; padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
+    a.nav-link:hover { color: #f8fafc; background: #1f2937; }
+    a.nav-link.active { color: #f8fafc; background: #1f2937; }
+    table.data { width: 100%; font-size: 0.875rem; }
+    table.data th { text-align: left; color: #94a3b8; font-weight: 500; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1f2937; font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    table.data td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #111827; }
+    table.data tr:hover td { background: #0f172a; }
+    .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.9rem; border-radius: 0.5rem; font-size: 0.875rem; font-weight: 500; }
+    .btn-primary { background: #ef4444; color: white; }
+    .btn-primary:hover { background: #dc2626; }
+    .btn-ghost { background: #1f2937; color: #e5e7eb; }
+    .btn-ghost:hover { background: #374151; }
+    .htmx-request .htmx-indicator { display: inline; }
+    .htmx-indicator { display: none; }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; background: #1f2937; color: #cbd5e1; }
+    /* Markdown output (AI 分析/决策/复盘) */
+    .markdown h1 { font-size: 1.35rem; font-weight: 700; margin: 1rem 0 0.6rem; color: #f8fafc; border-bottom: 1px solid #1f2937; padding-bottom: 0.35rem; }
+    .markdown h2 { font-size: 1.1rem; font-weight: 600; margin: 1.4rem 0 0.5rem; color: #f8fafc; }
+    .markdown h3 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.35rem; color: #cbd5e1; }
+    .markdown h4 { font-size: 0.9rem; font-weight: 600; margin: 0.8rem 0 0.25rem; color: #94a3b8; }
+    .markdown p { margin: 0.5rem 0; }
+    .markdown ul, .markdown ol { margin: 0.4rem 0 0.6rem 1.25rem; list-style: disc outside; }
+    .markdown ol { list-style: decimal outside; }
+    .markdown li { margin: 0.2rem 0; }
+    .markdown strong { color: #f8fafc; }
+    .markdown code { background: #1f2937; padding: 0.05rem 0.35rem; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.85em; }
+    .markdown table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85rem; width: 100%; }
+    .markdown th, .markdown td { border: 1px solid #1f2937; padding: 0.35rem 0.6rem; text-align: left; }
+    .markdown th { background: #1f2937; color: #cbd5e1; font-weight: 500; }
+    .markdown blockquote { border-left: 3px solid #374151; padding: 0.2rem 0.8rem; color: #94a3b8; margin: 0.5rem 0; background: #0f172a; }
+    .markdown hr { border: 0; border-top: 1px solid #1f2937; margin: 1rem 0; }
+    .markdown details { border: 1px solid #1f2937; border-radius: 6px; padding: 0.5rem 0.8rem; margin-top: 1rem; }
+    .markdown details summary { cursor: pointer; color: #94a3b8; }
+  </style>
+</head>
+<body class="min-h-screen font-sans">
+  <nav class="border-b border-gray-800 bg-surface-900/80 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-[1400px] mx-auto flex items-center gap-6 px-6 py-3">
+      <a href="/" class="flex items-center gap-2 text-lg font-bold text-white">
+        <span class="text-up">A</span><span>Stock</span>
+      </a>
+      <div class="flex-1 flex gap-1">
+        <a class="nav-link {% if active == 'dashboard' %}active{% endif %}" href="/">仪表盘</a>
+        <a class="nav-link {% if active == 'scan' %}active{% endif %}" href="/scan">机会扫描</a>
+        <a class="nav-link {% if active == 'advise' %}active{% endif %}" href="/advise">AI 决策</a>
+        <a class="nav-link {% if active == 'review' %}active{% endif %}" href="/review">复盘</a>
+        <a class="nav-link {% if active == 'journal' %}active{% endif %}" href="/journal">交易日志</a>
+        <a class="nav-link {% if active == 'alerts' %}active{% endif %}" href="/alerts">预警</a>
+      </div>
+      <div class="text-xs text-gray-500 font-mono">{{ now|default("") }}</div>
+    </div>
+  </nav>
+  <main class="max-w-[1400px] mx-auto px-6 py-6">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

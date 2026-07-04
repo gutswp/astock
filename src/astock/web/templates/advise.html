@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid grid-cols-4 gap-6">
+  <div class="col-span-3 space-y-4">
+    <div class="card p-6 flex items-center justify-between">
+      <div>
+        <h1 class="text-lg font-semibold">AI 决策报告</h1>
+        <p class="text-xs text-gray-500 mt-1">聚合大盘 + 板块 + 持仓 + 机会池 → 今日操作清单（约 30–60s）</p>
+      </div>
+      <form hx-post="/advise/run" hx-target="#ai-result" hx-swap="innerHTML" hx-disabled-elt="find button">
+        <button class="btn btn-primary" type="submit">
+          🤖 <span class="ml-1">立即生成</span>
+          <span class="htmx-indicator ml-2">生成中…</span>
+        </button>
+      </form>
+    </div>
+    <div id="ai-result">
+      <div class="card p-8 text-center text-gray-500 text-sm">
+        点击右上角「立即生成」按钮开始。<br>
+        <span class="text-xs">或从右侧历史列表查看之前的报告。</span>
+      </div>
+    </div>
+  </div>
+  <aside class="col-span-1 space-y-2">
+    <div class="card">
+      <div class="px-5 py-3 border-b border-gray-800 text-sm font-semibold">历史报告</div>
+      {% if history %}
+      <ul class="divide-y divide-gray-800">
+        {% for h in history %}
+        <li>
+          <a class="block px-5 py-3 hover:bg-surface-800 text-sm"
+             hx-get="/advise/history/{{ h.date }}"
+             hx-target="#ai-result"
+             hx-swap="innerHTML"
+             hx-push-url="false"
+             href="javascript:void(0)">
+            <div class="text-gray-200">{{ h.date }}</div>
+            <div class="text-xs text-gray-500">{{ (h.size / 1024)|round(1) }} KB</div>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-5 text-xs text-gray-500">暂无历史</div>
+      {% endif %}
+    </div>
+  </aside>
+</div>
+{% endblock %}

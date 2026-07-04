@@ -71,29 +71,29 @@ def _build_stock_context(code: str, config: AppConfig) -> str:
     return "\n".join(parts)
 
 
-def analyze_stock(code: str, config: AppConfig) -> None:
-    console = Console(width=100)
-
+def generate_analysis(code: str, config: AppConfig) -> str:
+    """执行单股 AI 分析，返回 markdown 文本."""
     code = code.zfill(6)
-    console.print(f"[dim]正在分析 {code}...[/dim]")
-
     context = _build_stock_context(code, config)
-
-    try:
-        client = make_client()
-    except anthropic.AuthenticationError:
-        console.print("[red]API Key 无效或未设置[/red]")
-        return
-
+    client = make_client()
     response = client.messages.create(
         model=config.ai_model,
         max_tokens=config.ai_max_tokens,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": f"请分析以下股票:\n\n{context}"}],
     )
+    return response.content[0].text
 
-    result = response.content[0].text
 
+def analyze_stock(code: str, config: AppConfig) -> None:
+    console = Console(width=100)
+    code = code.zfill(6)
+    console.print(f"[dim]正在分析 {code}...[/dim]")
+    try:
+        result = generate_analysis(code, config)
+    except anthropic.AuthenticationError:
+        console.print("[red]API Key 无效或未设置[/red]")
+        return
     console.print()
     console.print(Markdown(result))
     console.print()

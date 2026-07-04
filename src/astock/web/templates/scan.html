@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="space-y-4">
+  <div class="card p-6 flex items-center justify-between">
+    <div>
+      <h1 class="text-lg font-semibold">机会扫描</h1>
+      <p class="text-xs text-gray-500 mt-1">全市场 4700+ 只，涨幅 1–8% 且成交额 &gt; 1亿 → 技术面分析（约 1–2 分钟）</p>
+    </div>
+    <form hx-post="/scan/start" hx-target="#scan-panel" hx-swap="innerHTML" hx-disabled-elt="find button">
+      <button class="btn btn-primary" type="submit">
+        🔍 <span class="ml-1">开始扫描</span>
+      </button>
+    </form>
+  </div>
+
+  <div id="scan-panel">
+    {% if latest_job %}
+      {% include "partials/scan_status.html" %}
+    {% else %}
+      <div class="card p-8 text-center text-gray-500 text-sm">
+        点击「开始扫描」，会显示实时进度和最终结果。<br>
+        <span class="text-xs">扫描过程中你可以切到其他页面，任务后台跑，回来看结果。</span>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

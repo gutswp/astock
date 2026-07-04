@@ -1,0 +1,26 @@
+{% from "_macros.html" import money, pct, money_signed %}
+<div id="kpi-row" class="grid grid-cols-4 gap-4"
+     hx-get="/partials/kpi" hx-trigger="every 60s" hx-swap="outerHTML">
+  <div class="card p-5">
+    <div class="kpi-label">总市值</div>
+    <div class="kpi-value">{{ money(summary.total_market_value) }}</div>
+    <div class="text-xs text-gray-500 mt-1">成本 {{ money(summary.total_cost) }}</div>
+  </div>
+  <div class="card p-5">
+    <div class="kpi-label">浮动盈亏</div>
+    <div class="kpi-value">{{ money_signed(summary.total_profit) }}</div>
+    <div class="text-xs mt-1">{{ pct(summary.total_profit_pct) }}</div>
+  </div>
+  <div class="card p-5">
+    <div class="kpi-label">今日盈亏</div>
+    <div class="kpi-value">{{ money_signed(today_pnl) }}</div>
+    <div class="text-xs text-gray-500 mt-1">按持仓×日涨跌加权</div>
+  </div>
+  <div class="card p-5">
+    {% set acct_set = [] %}
+    {% for p in positions %}{% for a in p.accounts %}{% if a not in acct_set %}{% set _ = acct_set.append(a) %}{% endif %}{% endfor %}{% endfor %}
+    <div class="kpi-label">持仓 / 账户</div>
+    <div class="kpi-value num">{{ positions|length }} <span class="text-gray-500 text-lg font-normal">/ {{ acct_set|length }}</span></div>
+    <div class="text-xs text-gray-500 mt-1 truncate">{{ acct_set|join(' · ') }}</div>
+  </div>
+</div>

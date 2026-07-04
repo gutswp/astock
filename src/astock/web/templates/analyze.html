@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="space-y-4">
+  <div class="card p-6 flex items-center justify-between">
+    <div>
+      <h1 class="text-lg font-semibold">{{ name }} <span class="font-mono text-gray-500 text-base">{{ code }}</span></h1>
+      <p class="text-xs text-gray-500 mt-1">AI 单股深度分析（技术面 · 消息面 · 操作建议）</p>
+    </div>
+    <div class="text-xs text-gray-500 htmx-indicator" id="analyze-loading">分析中…（约 20-40s）</div>
+  </div>
+  <div id="analyze-result"
+       hx-post="/analyze/{{ code }}/run"
+       hx-trigger="load"
+       hx-target="this"
+       hx-swap="innerHTML"
+       hx-indicator="#analyze-loading">
+    <div class="card p-8 text-center text-gray-500 text-sm">正在加载数据 + 调用 AI…</div>
+  </div>
+</div>
+{% endblock %}

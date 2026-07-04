@@ -98,19 +98,13 @@ def _raw_trades_table(trades: list[dict], limit: int = 40) -> str:
     return "\n".join(lines)
 
 
-def run_review(config: AppConfig, days: int = 90) -> None:
-    console = Console(width=110)
-    console.print(f"[bold]== AI 交易复盘（最近 {days} 天） ==[/bold]")
-
+def generate_review(config: AppConfig, days: int = 90) -> tuple[str, str] | None:
+    """执行复盘，返回 (review_markdown, saved_path_str)。没有交易记录时返回 None."""
     trades = load_trades(days=days)
     if not trades:
-        console.print("[yellow]暂无交易记录。等你用 buy/sell -n 记几笔之后再回来复盘吧。[/yellow]")
-        return
+        return None
 
     codes = sorted({t["code"] for t in trades})
-    console.print(f"[dim]· 涉及 {len(codes)} 只标的，共 {len(trades)} 笔[/dim]")
-
-    console.print("[dim]· 拉取当前价格...[/dim]")
     spot = get_spot(codes) if codes else None
     current_spot: dict[str, float] = {}
     if spot is not None and not spot.empty:
@@ -125,13 +119,7 @@ def run_review(config: AppConfig, days: int = 90) -> None:
         f"{_raw_trades_table(trades)}\n"
     )
 
-    console.print("[dim]· 调用 AI 复盘...[/dim]")
-    try:
-        client = make_client()
-    except anthropic.AuthenticationError:
-        console.print("[red]API Key 无效或未设置[/red]")
-        return
-
+    client = make_client()
     response = client.messages.create(
         model=config.ai_model,
         max_tokens=max(config.ai_max_tokens, 3500),
@@ -148,8 +136,24 @@ def run_review(config: AppConfig, days: int = 90) -> None:
         f"# AStock AI 复盘 {today}（回看 {days} 天）\n\n{review}\n\n---\n\n<details><summary>数据</summary>\n\n{context}\n\n</details>\n",
         encoding="utf-8",
     )
+    return review, str(out_path)
 
+
+def run_review(config: AppConfig, days: int = 90) -> None:
+    console = Console(width=110)
+    console.print(f"[bold]== AI 交易复盘（最近 {days} 天） ==[/bold]")
+
+    result = None
+    try:
+        result = generate_review(config, days=days)
+    except anthropic.AuthenticationError:
+        console.print("[red]API Key 无效或未设置[/red]")
+        return
+    if result is None:
+        console.print("[yellow]暂无交易记录。等你用 buy/sell -n 记几笔之后再回来复盘吧。[/yellow]")
+        return
+    review, path = result
     console.print()
     console.print(Markdown(review))
     console.print()
-    console.print(f"[green]复盘已保存: {out_path}[/green]")
+    console.print(f"[green]复盘已保存: {path}[/green]")

@@ -129,19 +129,12 @@ def _build_context(config: AppConfig, console: Console) -> str:
     return "\n".join(parts)
 
 
-def run_advise(config: AppConfig) -> None:
-    console = Console(width=110)
-    console.print("[bold]== 生成 AI 决策报告 ==[/bold]")
-
+def generate_advise(config: AppConfig, console: Console | None = None) -> tuple[str, str]:
+    """执行决策报告生成，返回 (advice_markdown, saved_path_str)."""
+    console = console or Console(quiet=True)
     context = _build_context(config, console)
 
-    console.print("[dim]· 调用 AI 生成决策...[/dim]")
-    try:
-        client = make_client()
-    except anthropic.AuthenticationError:
-        console.print("[red]API Key 无效或未设置[/red]")
-        return
-
+    client = make_client()
     response = client.messages.create(
         model=config.ai_model,
         max_tokens=max(config.ai_max_tokens, 4000),
@@ -158,8 +151,19 @@ def run_advise(config: AppConfig) -> None:
         f"# AStock AI 决策报告 {today}\n\n{advice}\n\n---\n\n<details><summary>决策上下文</summary>\n\n{context}\n\n</details>\n",
         encoding="utf-8",
     )
+    return advice, str(out_path)
 
+
+def run_advise(config: AppConfig) -> None:
+    console = Console(width=110)
+    console.print("[bold]== 生成 AI 决策报告 ==[/bold]")
+    try:
+        advice, path = generate_advise(config, console=console)
+    except anthropic.AuthenticationError:
+        console.print("[red]API Key 无效或未设置[/red]")
+        return
+    console.print("[dim]· 调用 AI 生成决策...完成[/dim]")
     console.print()
     console.print(Markdown(advice))
     console.print()
-    console.print(f"[green]报告已保存: {out_path}[/green]")
+    console.print(f"[green]报告已保存: {path}[/green]")

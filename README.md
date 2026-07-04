@@ -18,16 +18,31 @@ EOF
 # 3. 填持仓（config/holdings.yaml 已给出模板结构）
 ```
 
-## 命令
+## Web UI（推荐）
+
+```bash
+astock web              # 启动，默认 http://127.0.0.1:8712
+astock web -p 8080      # 换端口
+astock web --reload     # 开发模式，改代码/模板自动重载
+```
+
+Web UI 包含所有 CLI 能力，仪表盘 = 持仓 + 大盘 + 行业 + 一键 AI 决策。
+
+## 命令（CLI）
 
 | 命令 | 用途 |
 |------|------|
+| `astock web` | 启动 Web UI |
 | `astock portfolio` | 跨账户合并持仓表（现价/盈亏/行业分布） |
 | `astock scan [--top N]` | 全市场机会扫描，按技术信号打分排序 |
 | `astock analyze <code>` | Claude AI 深度分析单只股票（含持仓上下文） |
+| `astock advise` | AI 决策报告：整合大盘+持仓+机会池给操作清单 |
+| `astock review [-d N]` | AI 复盘：从交易日志找模式与归因 |
+| `astock journal [-c code] [-a acct] [-d N]` | 查看交易历史 |
+| `astock alert list/add/rm` | 关注池 & 预警规则 CRUD |
+| `astock watch [--interval N]` | 单次/循环扫描关注池，触发时通知 |
 | `astock report` | 生成 Markdown 盘后报告到 `data/reports/` |
-| `astock buy <code> <shares> <price> -a <account>` | 记录买入，回写 `holdings.yaml` |
-| `astock sell <code> <shares> <price> -a <account>` | 记录卖出 |
+| `astock buy/sell <code> <shares> <price> -a <acct> [-n "备注"]` | 记录交易 |
 
 ## 数据源
 

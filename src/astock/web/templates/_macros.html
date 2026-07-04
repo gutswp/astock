@@ -1,0 +1,36 @@
+{# 通用宏 #}
+{% macro money(val) %}
+  {% if val is number %}
+    {% if val|abs >= 10000 %}
+      <span class="num">{{ "%.2f"|format(val/10000) }}<span class="text-gray-500 text-xs">万</span></span>
+    {% else %}
+      <span class="num">{{ "%.2f"|format(val) }}</span>
+    {% endif %}
+  {% else %}
+    <span class="text-gray-500">-</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro pct(val, sign=True) %}
+  {% if val is number %}
+    <span class="num {% if val > 0 %}pos{% elif val < 0 %}neg{% endif %}">
+      {% if sign %}{{ "%+.2f"|format(val) }}{% else %}{{ "%.2f"|format(val) }}{% endif %}%
+    </span>
+  {% else %}
+    <span class="text-gray-500">-</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro money_signed(val) %}
+  {% if val is number %}
+    <span class="num {% if val > 0 %}pos{% elif val < 0 %}neg{% endif %}">
+      {% if val|abs >= 10000 %}
+        {{ "%+.2f"|format(val/10000) }}<span class="text-xs opacity-70">万</span>
+      {% else %}
+        {{ "%+.2f"|format(val) }}
+      {% endif %}
+    </span>
+  {% else %}
+    <span class="text-gray-500">-</span>
+  {% endif %}
+{% endmacro %}

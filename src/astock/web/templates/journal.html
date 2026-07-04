@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-semibold">交易日志</h1>
+    <a href="/trade" class="btn btn-primary">＋ 记一笔</a>
+  </div>
+
+  <form method="get" action="/journal" class="card p-4 flex items-end gap-3">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">代码</label>
+      <input type="text" name="code" value="{{ f_code }}" maxlength="6" placeholder="全部"
+             class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white font-mono w-24">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">账户</label>
+      <select name="account" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-32">
+        <option value="">全部</option>
+        {% for a in accounts %}
+        <option value="{{ a }}" {% if a == f_account %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">最近 N 天</label>
+      <input type="number" name="days" value="{{ f_days }}" min="1" placeholder="全部"
+             class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-24 num">
+    </div>
+    <button type="submit" class="btn btn-ghost">筛选</button>
+    <a href="/journal" class="text-xs text-gray-500 hover:text-white">清除</a>
+  </form>
+
+  <div class="card overflow-hidden">
+    <div class="px-5 py-3 border-b border-gray-800 text-sm text-gray-400">
+      共 <span class="text-white font-medium">{{ trades|length }}</span> 条
+    </div>
+    {% if trades %}
+    <table class="data">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>账户</th>
+          <th>方向</th>
+          <th>代码</th>
+          <th>名称</th>
+          <th class="text-right">量</th>
+          <th class="text-right">价</th>
+          <th class="text-right">金额</th>
+          <th class="text-right">变动后</th>
+          <th>备注</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in trades %}
+        <tr>
+          <td class="text-xs text-gray-400 font-mono">{{ t.ts[:16] }}</td>
+          <td class="text-xs text-gray-400">{{ t.account }}</td>
+          <td>
+            {% if t.action == 'buy' %}
+              <span class="pos font-semibold">BUY</span>
+            {% else %}
+              <span class="neg font-semibold">SELL</span>
+            {% endif %}
+          </td>
+          <td class="font-mono text-xs">{{ t.code }}</td>
+          <td>{{ t.name }}</td>
+          <td class="text-right num">{{ t.shares }}</td>
+          <td class="text-right num">{{ "%.2f"|format(t.price) }}</td>
+          <td class="text-right num text-gray-300">{{ "%.2f"|format(t.shares * t.price) }}</td>
+          <td class="text-right text-xs text-gray-500 num">
+            {{ t.new_shares }} @ {{ "%.2f"|format(t.new_cost) }}
+          </td>
+          <td class="text-xs text-gray-300">{{ t.note or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-8 text-center text-gray-500 text-sm">
+      没有匹配的交易记录。
+      <br>
+      <a href="/trade" class="text-blue-400 hover:underline">记一笔试试 →</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

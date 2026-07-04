@@ -61,6 +61,22 @@ def advise(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+@click.option("--port", "-p", default=8712, type=int, help="端口（默认 8712）")
+@click.option("--reload/--no-reload", default=False, help="开发时代码热更新")
+def web(host: str, port: int, reload: bool) -> None:
+    """启动 Web UI（FastAPI + HTMX）"""
+    import uvicorn
+    from rich.console import Console
+    Console().print(f"[green]AStock Web UI → http://{host}:{port}[/green]")
+    uvicorn.run(
+        "astock.web.app:app",
+        host=host, port=port, reload=reload,
+        log_level="info" if reload else "warning",
+    )
+
+
+@cli.command()
 @click.argument("code")
 @click.argument("shares", type=int)
 @click.argument("price", type=float)

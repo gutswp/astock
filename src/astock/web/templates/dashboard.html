@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% from "_macros.html" import money, pct, money_signed %}
+
+{% block content %}
+<div class="space-y-6">
+
+  {% include "partials/kpi_row.html" %}
+
+  <div class="grid grid-cols-3 gap-6">
+    <div class="col-span-2 space-y-6">
+      {% include "partials/portfolio_table.html" %}
+
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="font-semibold">最近交易</div>
+          <div class="flex items-center gap-3">
+            <a href="/trade" class="text-xs text-up hover:underline">＋ 记一笔</a>
+            <a href="/journal" class="text-xs text-gray-500 hover:text-white">查看全部 →</a>
+          </div>
+        </div>
+        {% if recent_trades %}
+        <table class="data">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>方向</th>
+              <th>代码</th>
+              <th>名称</th>
+              <th class="text-right">量</th>
+              <th class="text-right">价</th>
+              <th>note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in recent_trades %}
+            <tr>
+              <td class="text-xs text-gray-400">{{ t.ts[:16] }}</td>
+              <td>
+                {% if t.action == 'buy' %}
+                  <span class="pos font-medium">BUY</span>
+                {% else %}
+                  <span class="neg font-medium">SELL</span>
+                {% endif %}
+              </td>
+              <td class="font-mono text-xs">{{ t.code }}</td>
+              <td>{{ t.name }}</td>
+              <td class="text-right num">{{ t.shares }}</td>
+              <td class="text-right num">{{ "%.2f"|format(t.price) }}</td>
+              <td class="text-gray-400 text-xs">{{ t.note or '' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center text-gray-500 py-6 text-sm">还没有交易记录。用 astock buy/sell 或页面上的交易按钮记一笔试试。</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-span-1 space-y-6">
+      <!-- 大盘指数 -->
+      <div class="card p-5">
+        <div class="font-semibold mb-3">大盘指数</div>
+        {% if indices %}
+        <div class="space-y-2">
+          {% for i in indices %}
+          <div class="flex items-center justify-between text-sm">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full {% if i.change_pct > 0 %}bg-up{% elif i.change_pct < 0 %}bg-down{% else %}bg-gray-600{% endif %}"></span>
+              <span>{{ i.name }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="num text-gray-300">{{ "%.2f"|format(i.price) }}</span>
+              <span class="w-16 text-right">{{ pct(i.change_pct) }}</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-xs text-gray-500">指数数据不可用</div>
+        {% endif %}
+      </div>
+
+      <!-- 行业分布 -->
+      <div class="card p-5">
+        <div class="font-semibold mb-3">行业分布</div>
+        {% if industry_rows %}
+        <div class="space-y-2">
+          {% for row in industry_rows %}
+          <div>
+            <div class="flex justify-between text-xs mb-1">
+              <span class="text-gray-300">{{ row.name }}</span>
+              <span class="text-gray-500 num">{{ money(row.value) }} · {{ "%.1f"|format(row.pct) }}%</span>
+            </div>
+            <div class="h-1.5 bg-gray-800 rounded overflow-hidden">
+              <div class="h-full bg-blue-500/70" style="width: {{ row.pct }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- AI 决策入口 -->
+      <div class="card p-5">
+        <div class="font-semibold mb-1">今日 AI 决策</div>
+        <p class="text-xs text-gray-500 mb-3">让 AI 结合大盘 + 持仓 + 机会池，给出「今日操作清单」</p>
+        <a href="/advise" class="btn btn-primary w-full justify-center">🤖 生成 AI 决策报告</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-4">
+  <h1 class="text-xl font-semibold">记录交易</h1>
+
+  {% if msg %}
+  <div class="card p-3 border-green-800 bg-green-950/30 text-green-300 text-sm">✓ {{ msg }}</div>
+  {% endif %}
+  {% if err %}
+  <div class="card p-3 border-red-800 bg-red-950/30 text-up text-sm">✗ {{ err }}</div>
+  {% endif %}
+
+  <form method="post" action="/trade" class="card p-6 space-y-4">
+    <div class="grid grid-cols-2 gap-4">
+      <label class="flex items-center gap-3">
+        <input type="radio" name="action" value="buy" required checked class="accent-red-500">
+        <span class="text-up font-semibold">买入 BUY</span>
+      </label>
+      <label class="flex items-center gap-3">
+        <input type="radio" name="action" value="sell" class="accent-green-500">
+        <span class="text-down font-semibold">卖出 SELL</span>
+      </label>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">账户</label>
+      <select name="account" required class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white">
+        {% for a in accounts %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+      </select>
+    </div>
+
+    <div class="grid grid-cols-3 gap-4">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">代码</label>
+        <input type="text" name="code" required pattern="\d{6}" maxlength="6" placeholder="600000"
+               class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white font-mono">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">数量（股）</label>
+        <input type="number" name="shares" required min="1" step="100" placeholder="100"
+               class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">价格</label>
+        <input type="number" name="price" required min="0.001" step="0.001" placeholder="10.50"
+               class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">备注 <span class="text-gray-600">（可选，记入交易日志）</span></label>
+      <input type="text" name="note" placeholder="例：MACD 金叉突破 20 日线，试仓"
+             class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white">
+    </div>
+
+    <div class="flex items-center justify-end gap-3 pt-2 border-t border-gray-800">
+      <a href="/" class="btn btn-ghost">取消</a>
+      <button type="submit" class="btn btn-primary">提交</button>
+    </div>
+  </form>
+
+  <div class="text-xs text-gray-500 text-center">
+    提交后会同步 <code class="text-gray-300">config/holdings.yaml</code> 和
+    <code class="text-gray-300">data/trades.jsonl</code>。
+  </div>
+</div>
+{% endblock %}

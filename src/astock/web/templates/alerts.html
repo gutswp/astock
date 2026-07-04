@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid grid-cols-3 gap-6">
+  <div class="col-span-2 space-y-4">
+
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-semibold">预警管理</h1>
+      <form hx-post="/alerts/check" hx-target="#alerts-hits" hx-swap="innerHTML">
+        <button type="submit" class="btn btn-primary">
+          🔔 <span class="ml-1">立即扫描</span>
+          <span class="htmx-indicator ml-2">检查中…</span>
+        </button>
+      </form>
+    </div>
+
+    {% if msg %}<div class="card p-3 border-green-800 bg-green-950/30 text-green-300 text-sm">✓ {{ msg }}</div>{% endif %}
+    {% if err %}<div class="card p-3 border-red-800 bg-red-950/30 text-up text-sm">✗ {{ err }}</div>{% endif %}
+
+    <div id="alerts-hits"></div>
+
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+        <div class="font-semibold">关注池</div>
+        <div class="text-xs text-gray-500">{{ watches|length }} 只</div>
+      </div>
+      {% if watches %}
+      <table class="data">
+        <thead>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th>规则</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for w in watches %}
+          <tr>
+            <td class="font-mono text-xs">{{ w.code }}</td>
+            <td class="font-semibold">{{ w.name }}</td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                {% for a in w.alerts %}
+                <div class="badge flex items-center gap-1">
+                  <span>{{ a.type }}{% if a.value is not none %}={{ a.value }}{% endif %}{% if a.period is not none %} · MA{{ a.period }}{% endif %}</span>
+                  <form method="post" action="/alerts/rm/{{ w.code }}/{{ loop.index0 }}" class="inline">
+                    <button type="submit" class="text-gray-500 hover:text-up" title="删除规则">×</button>
+                  </form>
+                </div>
+                {% endfor %}
+              </div>
+            </td>
+            <td class="text-right">
+              <form method="post" action="/alerts/rm/{{ w.code }}" class="inline"
+                    onsubmit="return confirm('移除 {{ w.name }} 的所有规则？')">
+                <button type="submit" class="text-xs text-up hover:underline">全部移除</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="p-8 text-center text-gray-500 text-sm">关注池为空，用右侧表单添加规则。</div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <aside class="col-span-1">
+    <div class="card p-5 space-y-4">
+      <div class="font-semibold">添加规则</div>
+      <form method="post" action="/alerts/add" class="space-y-3">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">代码</label>
+          <input type="text" name="code" required pattern="\d{6}" maxlength="6" placeholder="600000"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">规则类型</label>
+          <select name="type" required class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white">
+            {% for t in alert_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">阈值 <span class="text-gray-600">（价格 / 涨跌%；macd_cross 不需要）</span></label>
+          <input type="number" name="value" step="0.001"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">均线周期 <span class="text-gray-600">（仅 ma_break）</span></label>
+          <input type="number" name="period" min="1"
+                 class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white num">
+        </div>
+        <button type="submit" class="btn btn-primary w-full justify-center">添加</button>
+      </form>
+      <div class="text-xs text-gray-500 leading-6">
+        规则示例：<br>
+        · <code>price_above</code> = 目标价<br>
+        · <code>stop_loss</code> = 止损价（跌破触发）<br>
+        · <code>change_above/below</code> = 当日涨跌 %<br>
+        · <code>ma_break</code> + period = 上穿/跌破<br>
+        · <code>macd_cross</code>（金叉/死叉，无参）
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}

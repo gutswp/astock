@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid grid-cols-4 gap-6">
+  <div class="col-span-3 space-y-4">
+    <div class="card p-6 flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-lg font-semibold">AI 复盘</h1>
+        <p class="text-xs text-gray-500 mt-1">从交易日志找模式与归因，给可执行的改进</p>
+      </div>
+      <form hx-post="/review/run" hx-target="#ai-result" hx-swap="innerHTML" class="flex items-center gap-3">
+        <label class="text-xs text-gray-400">回看
+          <input type="number" name="days" value="90" min="1" max="365"
+                 class="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-sm ml-1"> 天
+        </label>
+        <button class="btn btn-primary" type="submit">
+          📖 <span class="ml-1">开始复盘</span>
+          <span class="htmx-indicator ml-2">生成中…</span>
+        </button>
+      </form>
+    </div>
+    <div id="ai-result">
+      <div class="card p-8 text-center text-gray-500 text-sm">
+        点击「开始复盘」按钮。<br>
+        <span class="text-xs">还没有交易？先去交易页记几笔（记得写 note）。</span>
+      </div>
+    </div>
+  </div>
+  <aside class="col-span-1">
+    <div class="card">
+      <div class="px-5 py-3 border-b border-gray-800 text-sm font-semibold">历史复盘</div>
+      {% if history %}
+      <ul class="divide-y divide-gray-800">
+        {% for h in history %}
+        <li>
+          <a class="block px-5 py-3 hover:bg-surface-800 text-sm"
+             hx-get="/review/history/{{ h.date }}"
+             hx-target="#ai-result"
+             hx-swap="innerHTML"
+             href="javascript:void(0)">
+            <div class="text-gray-200">{{ h.date }}</div>
+            <div class="text-xs text-gray-500">{{ (h.size / 1024)|round(1) }} KB</div>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-5 text-xs text-gray-500">暂无历史</div>
+      {% endif %}
+    </div>
+  </aside>
+</div>
+{% endblock %}
