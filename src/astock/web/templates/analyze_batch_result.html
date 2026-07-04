@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-semibold">批量 AI 分析（{{ items|length }} 只）</h1>
+    <a href="/analyze" class="text-xs text-gray-500 hover:text-white">← 重新选择</a>
+  </div>
+
+  {% if not items %}
+  <div class="card p-8 text-center text-gray-500 text-sm">
+    没有选中任何代码。<br>
+    <a href="/analyze" class="text-blue-400 hover:underline">返回选择 →</a>
+  </div>
+  {% else %}
+  <div class="text-xs text-gray-500">页面加载后所有卡片并行开始流式生成。每张卡完成后单独显示 ✓。</div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    {% for it in items %}
+    <div class="card p-4 space-y-3" data-stream-url="/analyze/{{ it.code }}/stream">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-2">
+        <div>
+          <span class="font-semibold">{{ it.name }}</span>
+          <span class="font-mono text-xs text-gray-500 ml-2">{{ it.code }}</span>
+        </div>
+        <div class="stream-status text-xs text-gray-500 flex items-center gap-2">
+          <span class="dot w-2 h-2 rounded-full bg-up animate-pulse"></span>
+          <span class="stage">连接中…</span>
+        </div>
+      </div>
+      <div class="markdown output text-xs text-gray-200 leading-6 max-h-[520px] overflow-y-auto"></div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <script>
+  (function(){
+    document.querySelectorAll('[data-stream-url]').forEach(container => {
+      const url = container.dataset.streamUrl;
+      const out = container.querySelector('.output');
+      const stage = container.querySelector('.stage');
+      const dot = container.querySelector('.dot');
+      const status = container.querySelector('.stream-status');
+      let buf = '';
+      const src = new EventSource(url);
+      src.addEventListener('stage', e => { stage.textContent = e.data; });
+      src.addEventListener('chunk', e => {
+        buf += e.data;
+        out.innerHTML = marked.parse(buf);
+      });
+      src.addEventListener('done', e => {
+        src.close();
+        dot.classList.remove('bg-up','animate-pulse');
+        dot.classList.add('bg-green-500');
+        status.innerHTML = '<span class="text-green-400">✓ 完成</span>';
+      });
+      src.addEventListener('error', e => {
+        src.close();
+        dot.classList.remove('bg-up','animate-pulse');
+        dot.classList.add('bg-red-500');
+        const msg = (e.data || '').trim() || '连接中断';
+        status.innerHTML = '<span class="text-up">✗ ' + msg + '</span>';
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+</div>
+{% endblock %}

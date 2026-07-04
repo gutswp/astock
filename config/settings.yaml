@@ -13,6 +13,12 @@ scan:
       - 20
       - 60
     fund_flow_min: 5000      # 主力净流入最低（万元）
+    rsi_oversold_reversal: true    # RSI < 30 反弹
+    kdj_golden_cross: true         # 低位 KDJ 金叉
+    boll_lower_bounce: true        # 布林下轨反弹
+    cci_oversold_reversal: false   # CCI < -100 反弹（可开）
+    dmi_golden_cross: false        # +DI 上穿 -DI 且 ADX ≥ 20（可开）
+    sar_bullish_flip: false        # SAR 翻多（可开）
 
 ai:
   model: claude-sonnet-4-6
@@ -29,7 +35,7 @@ alert_daemon:
   interval_seconds: 300      # 每 5 分钟扫一次关注池
   dedup_window_seconds: 3600 # 同一 (code,type,round(price,1)) 1 小时内只推一次
 
-# 推送通道（预警触发时使用）
+# 推送通道（预警触发时使用，也可推 AI 报告完成）
 notify:
   serverchan:
     enabled: false
@@ -42,3 +48,7 @@ notify:
     user: ""                 # 发件人邮箱
     password: ""             # SMTP 授权码（不是登录密码）
     to: ""                   # 收件人
+  # AI 报告推送：advise/review 完成时把 markdown 内容发到 Server 酱/邮件
+  push_ai_reports:
+    advise: false            # 决策报告完成时推
+    review: false            # 复盘报告完成时推

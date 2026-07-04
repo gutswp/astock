@@ -69,3 +69,48 @@ def test_bollinger_bands():
     u, m, l = ind.calc_bollinger(closes, period=20)
     assert not pd.isna(m.iloc[-1])
     assert u.iloc[-1] > m.iloc[-1] > l.iloc[-1]
+
+
+def test_cci_bounds_relative():
+    highs = pd.Series(range(1, 40), dtype=float)
+    lows = pd.Series([x - 1 for x in range(1, 40)], dtype=float)
+    closes = pd.Series(range(1, 40), dtype=float)
+    cci = ind.calc_cci(highs, lows, closes, period=14)
+    assert not pd.isna(cci.iloc[-1])
+
+
+def test_cci_reversal_smoke():
+    highs = pd.Series([10.0] * 30 + [5.0, 9.0])
+    lows = pd.Series([9.0] * 30 + [4.0, 8.0])
+    closes = pd.Series([9.5] * 30 + [4.5, 8.5])
+    assert isinstance(ind.detect_cci_oversold_reversal(highs, lows, closes), bool)
+
+
+def test_obv_direction():
+    closes = pd.Series([10, 11, 10, 12, 11], dtype=float)
+    volumes = pd.Series([100, 200, 150, 300, 100], dtype=float)
+    obv = ind.calc_obv(closes, volumes)
+    # 第一根 diff 是 NaN → 0；第二根 +200；第三根 -150；第四根 +300；第五根 -100
+    assert obv.iloc[-1] == 200 - 150 + 300 - 100
+
+
+def test_dmi_shapes():
+    highs = pd.Series(range(1, 40), dtype=float)
+    lows = pd.Series([x - 1 for x in range(1, 40)], dtype=float)
+    closes = pd.Series(range(1, 40), dtype=float)
+    plus, minus, adx = ind.calc_dmi(highs, lows, closes)
+    assert len(plus) == len(minus) == len(adx)
+
+
+def test_sar_shapes():
+    highs = pd.Series([10 + i * 0.1 for i in range(30)])
+    lows = pd.Series([9 + i * 0.1 for i in range(30)])
+    sar, trend = ind.calc_sar(highs, lows)
+    assert len(sar) == 30
+    assert set(trend.unique()) <= {0, 1, -1}
+
+
+def test_sar_flip_smoke():
+    highs = pd.Series([10 + i * 0.1 for i in range(20)] + [11.5, 10.5, 9.5])
+    lows = pd.Series([9 + i * 0.1 for i in range(20)] + [10.0, 9.0, 8.0])
+    assert isinstance(ind.detect_sar_bullish_flip(highs, lows), bool)

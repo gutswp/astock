@@ -102,3 +102,132 @@ def detect_boll_lower_bounce(closes: pd.Series, period: int = 20) -> bool:
     if pd.isna(lower.iloc[-1]) or pd.isna(lower.iloc[-2]):
         return False
     return bool(closes.iloc[-2] <= lower.iloc[-2] and closes.iloc[-1] > lower.iloc[-1])
+
+
+# --- CCI --------------------------------------------------------------------
+
+def calc_cci(highs: pd.Series, lows: pd.Series, closes: pd.Series, period: int = 14) -> pd.Series:
+    tp = (highs + lows + closes) / 3
+    sma = tp.rolling(window=period, min_periods=period).mean()
+    md = tp.rolling(window=period, min_periods=period).apply(
+        lambda x: (x - x.mean()).abs().mean(), raw=False
+    )
+    return (tp - sma) / (0.015 * md.replace(0, pd.NA))
+
+
+def detect_cci_oversold_reversal(highs: pd.Series, lows: pd.Series, closes: pd.Series,
+                                  period: int = 14) -> bool:
+    """昨日 CCI < -100，今日 CCI 上穿 -100."""
+    if len(closes) < period + 2:
+        return False
+    cci = calc_cci(highs, lows, closes, period)
+    if pd.isna(cci.iloc[-1]) or pd.isna(cci.iloc[-2]):
+        return False
+    return bool(cci.iloc[-2] < -100 and cci.iloc[-1] >= -100)
+
+
+# --- OBV --------------------------------------------------------------------
+
+def calc_obv(closes: pd.Series, volumes: pd.Series) -> pd.Series:
+    diff = closes.diff()
+    signed = volumes.where(diff > 0, -volumes.where(diff < 0, 0))
+    return signed.fillna(0).cumsum()
+
+
+# --- DMI / ADX --------------------------------------------------------------
+
+def calc_dmi(highs: pd.Series, lows: pd.Series, closes: pd.Series,
+             period: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """返回 (+DI, -DI, ADX)."""
+    high_diff = highs.diff()
+    low_diff = -lows.diff()
+    plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
+    minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0.0)
+
+    prev_close = closes.shift(1)
+    tr = pd.concat([
+        (highs - lows),
+        (highs - prev_close).abs(),
+        (lows - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    import numpy as np
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    atr_safe = atr.replace(0, np.nan)
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_safe
+    di_sum = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / di_sum
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return plus_di, minus_di, adx
+
+
+def detect_dmi_golden_cross(highs: pd.Series, lows: pd.Series, closes: pd.Series,
+                             period: int = 14, adx_min: float = 20.0) -> bool:
+    """+DI 上穿 -DI 且 ADX ≥ adx_min（有趋势的多头开始）."""
+    if len(closes) < period * 2 + 1:
+        return False
+    plus_di, minus_di, adx = calc_dmi(highs, lows, closes, period)
+    if pd.isna(plus_di.iloc[-1]) or pd.isna(minus_di.iloc[-2]) or pd.isna(adx.iloc[-1]):
+        return False
+    crossed = plus_di.iloc[-2] < minus_di.iloc[-2] and plus_di.iloc[-1] >= minus_di.iloc[-1]
+    return bool(crossed and adx.iloc[-1] >= adx_min)
+
+
+# --- Parabolic SAR ----------------------------------------------------------
+
+def calc_sar(highs: pd.Series, lows: pd.Series,
+             af_step: float = 0.02, af_max: float = 0.2) -> tuple[pd.Series, pd.Series]:
+    """返回 (sar 值, trend 序列)。trend=1 多头，-1 空头."""
+    n = len(highs)
+    sar = pd.Series([float("nan")] * n, index=highs.index)
+    trend = pd.Series([0] * n, index=highs.index)
+    if n < 2:
+        return sar, trend
+
+    # 用前两根初始化：假设初始为多头
+    up = True
+    ep = float(highs.iloc[0])
+    af = af_step
+    sar.iloc[0] = float(lows.iloc[0])
+    trend.iloc[0] = 1
+
+    for i in range(1, n):
+        prev_sar = sar.iloc[i - 1]
+        h_i, l_i = float(highs.iloc[i]), float(lows.iloc[i])
+        if up:
+            cur = prev_sar + af * (ep - prev_sar)
+            cur = min(cur, float(lows.iloc[i - 1]), l_i if i >= 2 else float(lows.iloc[i - 1]))
+            if l_i < cur:
+                # 反转
+                up = False
+                cur = ep  # 新 SAR 是原 EP
+                ep = l_i
+                af = af_step
+            else:
+                if h_i > ep:
+                    ep = h_i
+                    af = min(af + af_step, af_max)
+        else:
+            cur = prev_sar + af * (ep - prev_sar)
+            cur = max(cur, float(highs.iloc[i - 1]), h_i if i >= 2 else float(highs.iloc[i - 1]))
+            if h_i > cur:
+                up = True
+                cur = ep
+                ep = h_i
+                af = af_step
+            else:
+                if l_i < ep:
+                    ep = l_i
+                    af = min(af + af_step, af_max)
+        sar.iloc[i] = cur
+        trend.iloc[i] = 1 if up else -1
+    return sar, trend
+
+
+def detect_sar_bullish_flip(highs: pd.Series, lows: pd.Series) -> bool:
+    """SAR 从空头翻多头（今日 trend=1 且昨日 trend=-1）."""
+    if len(highs) < 3:
+        return False
+    _, trend = calc_sar(highs, lows)
+    return bool(trend.iloc[-2] == -1 and trend.iloc[-1] == 1)

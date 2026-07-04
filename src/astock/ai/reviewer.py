@@ -171,6 +171,12 @@ def stream_review(config: AppConfig, days: int = 90):
 
         review = "".join(buf)
         path = _save_review(review, days, context)
+        try:
+            from astock.notify import notify, should_push_ai
+            if should_push_ai("review"):
+                notify(f"📖 AStock 复盘（{days} 天）", review)
+        except Exception:
+            pass
         yield ("done", path)
     except Exception as e:
         yield ("error", str(e))

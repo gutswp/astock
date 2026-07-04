@@ -7,10 +7,13 @@ import pandas as pd
 
 from astock.data.provider import get_hist
 from astock.screen.indicators import (
+    calc_cci,
+    calc_dmi,
     calc_kdj,
     calc_ma,
     calc_macd,
     calc_rsi,
+    calc_sar,
 )
 
 STRATEGIES = {
@@ -19,6 +22,9 @@ STRATEGIES = {
     "ma_break_20": "上穿 MA20",
     "ma_break_60": "上穿 MA60",
     "kdj_golden_cross": "KDJ 金叉（低位）",
+    "cci_oversold": "CCI 超卖反弹（<-100 → ≥-100）",
+    "dmi_golden_cross": "DMI 金叉（+DI 上穿 -DI）",
+    "sar_bullish_flip": "SAR 翻多",
 }
 
 
@@ -88,6 +94,31 @@ def _signal_indices(closes: pd.Series, highs: pd.Series, lows: pd.Series,
             if pd.isna(k.iloc[i - 1]) or pd.isna(d.iloc[i - 1]):
                 continue
             if k.iloc[i - 1] < d.iloc[i - 1] and k.iloc[i] >= d.iloc[i] and k.iloc[i] < 50:
+                idxs.append(i)
+    elif strategy == "cci_oversold":
+        if n < 20:
+            return idxs
+        cci = calc_cci(highs, lows, closes)
+        for i in range(1, n):
+            if pd.isna(cci.iloc[i - 1]) or pd.isna(cci.iloc[i]):
+                continue
+            if cci.iloc[i - 1] < -100 and cci.iloc[i] >= -100:
+                idxs.append(i)
+    elif strategy == "dmi_golden_cross":
+        if n < 40:
+            return idxs
+        plus, minus, adx = calc_dmi(highs, lows, closes)
+        for i in range(1, n):
+            if pd.isna(plus.iloc[i - 1]) or pd.isna(minus.iloc[i - 1]) or pd.isna(adx.iloc[i]):
+                continue
+            if plus.iloc[i - 1] < minus.iloc[i - 1] and plus.iloc[i] >= minus.iloc[i] and adx.iloc[i] >= 20:
+                idxs.append(i)
+    elif strategy == "sar_bullish_flip":
+        if n < 5:
+            return idxs
+        _, trend = calc_sar(highs, lows)
+        for i in range(1, n):
+            if trend.iloc[i - 1] == -1 and trend.iloc[i] == 1:
                 idxs.append(i)
 
     return idxs

@@ -129,6 +129,54 @@ async def review_history(request: Request, date: str):
     )
 
 
+@router.get("/analyze")
+async def analyze_batch_page(request: Request):
+    """批量分析首页：多选持仓 + 自定义代码 → 逐一并行流式分析."""
+    config = request.app.state.config
+    holdings = []
+    for acct in config.accounts:
+        for h in acct.holdings:
+            holdings.append({"code": h.code, "name": h.name, "account": acct.name})
+    # 按 code 去重
+    seen = set()
+    dedup = []
+    for h in holdings:
+        if h["code"] not in seen:
+            seen.add(h["code"])
+            dedup.append(h)
+    dedup.sort(key=lambda x: x["code"])
+    return render(request, "analyze_batch.html",
+                  active="", title="批量 AI 分析", holdings=dedup)
+
+
+@router.post("/analyze/batch")
+async def analyze_batch_run(request: Request):
+    form = await request.form()
+    # 表单里 codes 是 checkbox（可多个）+ custom 是 textarea
+    picked = [c for c in form.getlist("codes") if c]
+    custom_text = (form.get("custom") or "").strip()
+    if custom_text:
+        for chunk in custom_text.replace(",", "\n").split("\n"):
+            code = chunk.strip()
+            if code.isdigit() and len(code) == 6 and code not in picked:
+                picked.append(code)
+    picked = picked[:8]  # 最多 8 只，避免过度消耗
+    # 拉名字方便展示
+    from starlette.concurrency import run_in_threadpool
+    name_map: dict[str, str] = {}
+    if picked:
+        try:
+            df = await run_in_threadpool(get_spot, picked)
+            if not df.empty:
+                for _, r in df.iterrows():
+                    name_map[str(r["代码"]).zfill(6)] = str(r["名称"])
+        except Exception:
+            pass
+    items = [{"code": c, "name": name_map.get(c, c)} for c in picked]
+    return render(request, "analyze_batch_result.html",
+                  active="", title="批量 AI 分析", items=items)
+
+
 @router.get("/analyze/{code}")
 async def analyze_page(request: Request, code: str, force: bool = False):
     code = code.zfill(6)

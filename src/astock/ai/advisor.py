@@ -179,6 +179,13 @@ def stream_advise(config: AppConfig):
 
         advice = "".join(buf)
         path = _save_advise(advice, context)
+        # 可选推送
+        try:
+            from astock.notify import notify, should_push_ai
+            if should_push_ai("advise"):
+                notify(f"🤖 AStock 决策报告 {datetime.now():%m-%d}", advice)
+        except Exception:
+            pass
         yield ("done", path)
     except Exception as e:
         yield ("error", str(e))

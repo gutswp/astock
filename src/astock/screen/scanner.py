@@ -11,10 +11,13 @@ from astock.render.tables import print_scan_results
 from astock.screen.indicators import (
     calc_volume_ratio,
     detect_boll_lower_bounce,
+    detect_cci_oversold_reversal,
+    detect_dmi_golden_cross,
     detect_kdj_golden_cross,
     detect_ma_breakthrough,
     detect_macd_golden_cross,
     detect_rsi_oversold_reversal,
+    detect_sar_bullish_flip,
 )
 
 
@@ -103,6 +106,15 @@ def _scan_stock(code: str, config: AppConfig) -> tuple[list[str], float]:
 
         if config.scan.boll_lower_bounce and detect_boll_lower_bounce(closes):
             signals.append("BOLL下轨反弹")
+
+        if config.scan.cci_oversold_reversal and detect_cci_oversold_reversal(highs, lows, closes):
+            signals.append("CCI超卖反弹")
+
+        if config.scan.dmi_golden_cross and detect_dmi_golden_cross(highs, lows, closes):
+            signals.append("DMI金叉")
+
+        if config.scan.sar_bullish_flip and detect_sar_bullish_flip(highs, lows):
+            signals.append("SAR翻多")
 
         vol_ratio = calc_volume_ratio(volumes)
         if vol_ratio >= config.scan.volume_ratio_min:

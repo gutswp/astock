@@ -34,6 +34,9 @@ class ScanConfig:
     rsi_oversold_reversal: bool = True
     kdj_golden_cross: bool = True
     boll_lower_bounce: bool = True
+    cci_oversold_reversal: bool = False
+    dmi_golden_cross: bool = False
+    sar_bullish_flip: bool = False
 
 
 @dataclass
@@ -71,6 +74,9 @@ def load_settings(path: Path | None = None) -> ScanConfig:
         rsi_oversold_reversal=signals.get("rsi_oversold_reversal", True),
         kdj_golden_cross=signals.get("kdj_golden_cross", True),
         boll_lower_bounce=signals.get("boll_lower_bounce", True),
+        cci_oversold_reversal=signals.get("cci_oversold_reversal", False),
+        dmi_golden_cross=signals.get("dmi_golden_cross", False),
+        sar_bullish_flip=signals.get("sar_bullish_flip", False),
     )
 
 

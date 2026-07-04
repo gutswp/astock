@@ -1,5 +1,7 @@
 # AStock
 
+[![tests](https://github.com/gutswp/astock/actions/workflows/test.yml/badge.svg)](https://github.com/gutswp/astock/actions/workflows/test.yml)
+
 A 股散户的个人化 AI 交易助手。跨账户合并持仓、全市场技术面扫描、Claude 驱动的个股分析和盘后报告。
 
 ## 快速开始

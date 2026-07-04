@@ -17,6 +17,12 @@ def _notify_config() -> dict:
     return raw.get("notify") or {}
 
 
+def should_push_ai(kind: str) -> bool:
+    """kind ∈ {'advise', 'review'}."""
+    cfg = _notify_config()
+    return bool((cfg.get("push_ai_reports") or {}).get(kind))
+
+
 def notify(title: str, body: str) -> list[str]:
     """按 settings.yaml.notify 配置发送。返回成功的通道名列表."""
     cfg = _notify_config()
