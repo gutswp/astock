@@ -133,7 +133,16 @@
     </script>
   </div>
 
-  <!-- AI 分析（流式） -->
+  <!-- AI 分析 -->
+  {% if cached_html %}
+  <div id="analyze-result" class="card p-6">
+    <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-800">
+      <div class="font-semibold">分析 · {{ code }} <span class="text-xs text-gray-500 ml-2">当日缓存</span></div>
+      <a href="/analyze/{{ code }}?force=1" class="text-xs text-blue-400 hover:underline">重新生成 ↻</a>
+    </div>
+    <div class="markdown text-sm text-gray-200 leading-7">{{ cached_html|safe }}</div>
+  </div>
+  {% else %}
   <div id="analyze-result"
        hx-post="/analyze/{{ code }}/run"
        hx-trigger="load"
@@ -141,5 +150,6 @@
        hx-swap="innerHTML">
     <div class="card p-8 text-center text-gray-500 text-sm">正在准备 AI 分析…</div>
   </div>
+  {% endif %}
 </div>
 {% endblock %}

@@ -31,8 +31,10 @@
   </form>
 
   <div class="card overflow-hidden">
-    <div class="px-5 py-3 border-b border-gray-800 text-sm text-gray-400">
-      共 <span class="text-white font-medium">{{ trades|length }}</span> 条
+    <div class="px-5 py-3 border-b border-gray-800 text-sm text-gray-400 flex items-center justify-between">
+      <span>共 <span class="text-white font-medium">{{ trades|length }}</span> 条</span>
+      <a href="/export/trades.csv{% if f_code or f_account or f_days %}?{% if f_code %}code={{ f_code }}&{% endif %}{% if f_account %}account={{ f_account }}&{% endif %}{% if f_days %}days={{ f_days }}{% endif %}{% endif %}"
+         class="text-xs text-gray-500 hover:text-white">导出 CSV ↓</a>
     </div>
     {% if trades %}
     <table class="data">

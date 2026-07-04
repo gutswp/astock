@@ -1,12 +1,48 @@
 import click
 
+from astock.ai.client import load_env
 from astock.config import load_config
+
+
+# --- Shell completion 回调 -------------------------------------------------
+
+def _complete_account(ctx, param, incomplete):
+    try:
+        cfg = load_config()
+        return [a.name for a in cfg.accounts if a.name.startswith(incomplete)]
+    except Exception:
+        return []
+
+
+def _complete_code(ctx, param, incomplete):
+    """从 holdings + watchlist 里所有已知代码补全."""
+    codes: set[str] = set()
+    try:
+        cfg = load_config()
+        for a in cfg.accounts:
+            for h in a.holdings:
+                codes.add(h.code)
+    except Exception:
+        pass
+    try:
+        from astock.screen.alerts import load_watchlist
+        for w in load_watchlist():
+            codes.add(w.code)
+    except Exception:
+        pass
+    return sorted(c for c in codes if c.startswith(incomplete))
+
+
+def _complete_alert_type(ctx, param, incomplete):
+    from astock.screen.alerts import ALERT_TYPES
+    return sorted(t for t in ALERT_TYPES if t.startswith(incomplete))
 
 
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """AStock - AI Agent for Chinese A-Share Investors"""
+    load_env()
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config()
 
@@ -33,7 +69,7 @@ def scan(ctx: click.Context, top: int) -> None:
 
 
 @cli.command()
-@click.argument("code")
+@click.argument("code", shell_complete=_complete_code)
 @click.pass_context
 def analyze(ctx: click.Context, code: str) -> None:
     """Analyze a stock with AI (holding or candidate)."""
@@ -77,10 +113,10 @@ def web(host: str, port: int, reload: bool) -> None:
 
 
 @cli.command()
-@click.argument("code")
+@click.argument("code", shell_complete=_complete_code)
 @click.argument("shares", type=int)
 @click.argument("price", type=float)
-@click.option("--account", "-a", required=True, help="Account name (e.g., wp-ky)")
+@click.option("--account", "-a", required=True, shell_complete=_complete_account, help="Account name (e.g., wp-ky)")
 @click.option("--note", "-n", default=None, help="买入理由（会记入日志）")
 def buy(code: str, shares: int, price: float, account: str, note: str | None) -> None:
     """Record a buy trade."""
@@ -90,10 +126,10 @@ def buy(code: str, shares: int, price: float, account: str, note: str | None) ->
 
 
 @cli.command()
-@click.argument("code")
+@click.argument("code", shell_complete=_complete_code)
 @click.argument("shares", type=int)
 @click.argument("price", type=float)
-@click.option("--account", "-a", required=True, help="Account name (e.g., wp-ky)")
+@click.option("--account", "-a", required=True, shell_complete=_complete_account, help="Account name (e.g., wp-ky)")
 @click.option("--note", "-n", default=None, help="卖出理由（会记入日志）")
 def sell(code: str, shares: int, price: float, account: str, note: str | None) -> None:
     """Record a sell trade."""
@@ -103,8 +139,8 @@ def sell(code: str, shares: int, price: float, account: str, note: str | None) -
 
 
 @cli.command()
-@click.option("--code", "-c", default=None, help="按代码过滤")
-@click.option("--account", "-a", default=None, help="按账户过滤")
+@click.option("--code", "-c", default=None, shell_complete=_complete_code, help="按代码过滤")
+@click.option("--account", "-a", default=None, shell_complete=_complete_account, help="按账户过滤")
 @click.option("--days", "-d", default=None, type=int, help="只看最近 N 天")
 def journal(code: str | None, account: str | None, days: int | None) -> None:
     """查看交易历史（含 note）。"""
@@ -140,8 +176,8 @@ def alert_list() -> None:
 
 
 @alert.command("add")
-@click.argument("code")
-@click.option("--type", "-t", "alert_type", required=True,
+@click.argument("code", shell_complete=_complete_code)
+@click.option("--type", "-t", "alert_type", required=True, shell_complete=_complete_alert_type,
               help="price_above/price_below/stop_loss/change_above/change_below/ma_break/macd_cross")
 @click.option("--value", "-v", default=None, type=float, help="阈值（macd_cross 不需要）")
 @click.option("--period", "-p", default=None, type=int, help="ma_break 的均线周期")
@@ -159,7 +195,7 @@ def alert_add(code: str, alert_type: str, value: float | None, period: int | Non
 
 
 @alert.command("rm")
-@click.argument("code")
+@click.argument("code", shell_complete=_complete_code)
 @click.option("--index", "-i", default=None, type=int, help="删除该 code 下第 N 条（不给则整只清出）")
 def alert_rm(code: str, index: int | None) -> None:
     """移除关注股或某条规则。"""

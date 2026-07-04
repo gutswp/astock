@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "_macros.html" import pct %}
+{% block content %}
+<div class="space-y-4">
+  <h1 class="text-xl font-semibold">信号回测</h1>
+  <p class="text-xs text-gray-500">在历史 K 线上找信号触发日，模拟每次买入并持有 N 天卖出，统计胜率与平均收益。样本越多越有意义。</p>
+
+  <form method="post" action="/tools/backtest" class="card p-4 flex items-end gap-3 flex-wrap">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">代码</label>
+      <input name="code" required pattern="\d{6}" maxlength="6" value="{{ code or '' }}"
+             placeholder="600000"
+             class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white font-mono w-24"
+             hx-get="/api/lookup" hx-trigger="input changed delay:400ms"
+             hx-target="#bt-name" hx-swap="innerHTML" hx-include="this">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">策略</label>
+      <select name="strategy" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-56">
+        {% for key, label in strategies.items() %}
+        <option value="{{ key }}" {% if key == strategy %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">持有天数</label>
+      <select name="hold_days" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-20">
+        {% for n in [3, 5, 10, 20] %}
+        <option value="{{ n }}" {% if n == hold_days %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">回看天数</label>
+      <select name="days" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-24">
+        {% for n in [120, 250, 500, 1000] %}
+        <option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">跑回测</button>
+    <span id="bt-name" class="text-xs">{{ name or '' }}</span>
+  </form>
+
+  {% if result is not none and result %}
+  <div class="card p-6 space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <div class="font-semibold">{{ result.strategy_label }} · 持有 {{ result.hold_days }} 天</div>
+        <div class="text-xs text-gray-500 mt-1">{{ code }} {{ name }} · 回看 {{ days }} 根 K 线 · 找到 {{ result.total_signals }} 次信号，有效样本 {{ result.trades|length }} 笔</div>
+      </div>
+    </div>
+
+    {% if result.trades %}
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div>
+        <div class="kpi-label">胜率</div>
+        <div class="kpi-value">{{ result.win_rate }}%</div>
+      </div>
+      <div>
+        <div class="kpi-label">平均收益</div>
+        <div class="kpi-value {% if result.avg_return > 0 %}pos{% elif result.avg_return < 0 %}neg{% endif %}">
+          {{ "%+.2f"|format(result.avg_return) }}%
+        </div>
+      </div>
+      <div>
+        <div class="kpi-label">累计收益</div>
+        <div class="kpi-value {% if result.total_return > 0 %}pos{% elif result.total_return < 0 %}neg{% endif %}">
+          {{ "%+.2f"|format(result.total_return) }}%
+        </div>
+        <div class="text-xs text-gray-500 mt-1">复利假设每次全仓</div>
+      </div>
+      <div>
+        <div class="kpi-label">最佳单笔</div>
+        <div class="kpi-value pos">{{ "%+.2f"|format(result.best_return) }}%</div>
+      </div>
+      <div>
+        <div class="kpi-label">最差单笔</div>
+        <div class="kpi-value neg">{{ "%+.2f"|format(result.worst_return) }}%</div>
+      </div>
+    </div>
+
+    <table class="data">
+      <thead>
+        <tr>
+          <th>入场日</th>
+          <th class="text-right">入场价</th>
+          <th>卖出日</th>
+          <th class="text-right">卖出价</th>
+          <th class="text-right">收益</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in result.trades %}
+        <tr>
+          <td class="text-xs font-mono">{{ t.entry_date }}</td>
+          <td class="text-right num">{{ t.entry_price }}</td>
+          <td class="text-xs font-mono">{{ t.exit_date }}</td>
+          <td class="text-right num">{{ t.exit_price }}</td>
+          <td class="text-right {% if t.return_pct > 0 %}pos{% elif t.return_pct < 0 %}neg{% endif %} num">
+            {{ "%+.2f"|format(t.return_pct) }}%
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="text-center text-gray-500 py-6 text-sm">回看窗口内没有有效样本。可以扩大回看天数或换一只标的。</div>
+    {% endif %}
+  </div>
+  {% elif result is not none %}
+  <div class="card p-6 text-center text-gray-500 text-sm">该代码历史数据不足或获取失败。</div>
+  {% endif %}
+</div>
+{% endblock %}

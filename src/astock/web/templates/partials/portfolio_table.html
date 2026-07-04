@@ -3,26 +3,27 @@
      hx-get="/partials/portfolio" hx-trigger="every 60s" hx-swap="outerHTML">
   <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
     <div class="font-semibold">持仓明细</div>
-    <div class="text-xs text-gray-500">
-      共 {{ positions|length }} 只 · 60s 自动刷新
-      <span class="htmx-indicator ml-2">·刷新中·</span>
+    <div class="text-xs text-gray-500 flex items-center gap-3">
+      <span>共 {{ positions|length }} 只 · 60s 自动刷新</span>
+      <span class="htmx-indicator">·刷新中·</span>
+      <a href="/export/portfolio.csv" class="text-gray-500 hover:text-white">导出 CSV ↓</a>
     </div>
   </div>
-  <table class="data">
+  <table class="data sortable">
     <thead>
       <tr>
-        <th>名称</th>
-        <th>代码</th>
-        <th class="text-right">现价</th>
-        <th class="text-right">今日</th>
-        <th class="text-right">持股</th>
-        <th class="text-right">成本</th>
-        <th class="text-right">市值</th>
-        <th class="text-right">占比</th>
-        <th class="text-right">盈亏</th>
-        <th class="text-right">盈亏%</th>
-        <th>行业</th>
-        <th>账户</th>
+        <th data-sort="text">名称</th>
+        <th data-sort="text">代码</th>
+        <th class="text-right" data-sort="num">现价</th>
+        <th class="text-right" data-sort="num">今日</th>
+        <th class="text-right" data-sort="num">持股</th>
+        <th class="text-right" data-sort="num">成本</th>
+        <th class="text-right" data-sort="num" data-sort-default="desc">市值</th>
+        <th class="text-right" data-sort="num">占比</th>
+        <th class="text-right" data-sort="num">盈亏</th>
+        <th class="text-right" data-sort="num">盈亏%</th>
+        <th data-sort="text">行业</th>
+        <th data-sort="text">账户</th>
         <th></th>
       </tr>
     </thead>
@@ -32,14 +33,14 @@
       <tr>
         <td class="font-semibold">{{ p.name }}</td>
         <td class="font-mono text-gray-400 text-xs">{{ p.code }}</td>
-        <td class="text-right num">{{ "%.2f"|format(p.current_price) }}</td>
-        <td class="text-right">{{ pct(p.daily_change) }}</td>
-        <td class="text-right num text-gray-400">{{ p.total_shares }}</td>
-        <td class="text-right num text-gray-400">{{ "%.2f"|format(p.avg_cost) }}</td>
-        <td class="text-right">{{ money(p.market_value) }}</td>
-        <td class="text-right num text-gray-500 text-xs">{{ "%.1f"|format(share) }}%</td>
-        <td class="text-right">{{ money_signed(p.profit) }}</td>
-        <td class="text-right">{{ pct(p.profit_pct) }}</td>
+        <td class="text-right num" data-val="{{ p.current_price }}">{{ "%.2f"|format(p.current_price) }}</td>
+        <td class="text-right" data-val="{{ p.daily_change }}">{{ pct(p.daily_change) }}</td>
+        <td class="text-right num text-gray-400" data-val="{{ p.total_shares }}">{{ p.total_shares }}</td>
+        <td class="text-right num text-gray-400" data-val="{{ p.avg_cost }}">{{ "%.2f"|format(p.avg_cost) }}</td>
+        <td class="text-right" data-val="{{ p.market_value }}">{{ money(p.market_value) }}</td>
+        <td class="text-right num text-gray-500 text-xs" data-val="{{ share }}">{{ "%.1f"|format(share) }}%</td>
+        <td class="text-right" data-val="{{ p.profit }}">{{ money_signed(p.profit) }}</td>
+        <td class="text-right" data-val="{{ p.profit_pct }}">{{ pct(p.profit_pct) }}</td>
         <td><span class="badge">{{ p.industry }}</span></td>
         <td class="text-xs text-gray-500">{{ p.accounts|join(' ') }}</td>
         <td class="text-right">
@@ -51,4 +52,36 @@
       {% endfor %}
     </tbody>
   </table>
+  <script>
+  (function(){
+    // 每次 HTMX 换入片段后重装排序
+    const table = document.currentScript.parentElement.querySelector('table.sortable');
+    if (!table) return;
+    const headers = Array.from(table.querySelectorAll('th[data-sort]'));
+    const tbody = table.querySelector('tbody');
+    headers.forEach((th, idx) => {
+      th.style.cursor = 'pointer';
+      th.title = '点击排序';
+      th.addEventListener('click', () => {
+        const cur = th.dataset.dir || 'none';
+        const next = cur === 'asc' ? 'desc' : 'asc';
+        headers.forEach(h => { delete h.dataset.dir; h.querySelector('.sort-arrow')?.remove(); });
+        th.dataset.dir = next;
+        const arrow = document.createElement('span');
+        arrow.className = 'sort-arrow text-xs text-gray-500 ml-1';
+        arrow.textContent = next === 'asc' ? '↑' : '↓';
+        th.appendChild(arrow);
+        const type = th.dataset.sort;
+        const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.children.length > 1);
+        rows.sort((a, b) => {
+          const av = a.children[idx].dataset.val ?? a.children[idx].textContent.trim();
+          const bv = b.children[idx].dataset.val ?? b.children[idx].textContent.trim();
+          if (type === 'num') return (parseFloat(av) - parseFloat(bv)) * (next === 'asc' ? 1 : -1);
+          return av.localeCompare(bv, 'zh') * (next === 'asc' ? 1 : -1);
+        });
+        rows.forEach(r => tbody.appendChild(r));
+      });
+    });
+  })();
+  </script>
 </div>

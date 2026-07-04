@@ -11,7 +11,7 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from astock import DATA_DIR
 from astock.ai.advisor import generate_advise, stream_advise
-from astock.ai.analyst import generate_analysis, stream_analysis
+from astock.ai.analyst import generate_analysis, load_cached_analysis, stream_analysis
 from astock.ai.reviewer import generate_review, stream_review
 from astock.data.provider import get_spot
 from astock.web.deps import render
@@ -130,7 +130,7 @@ async def review_history(request: Request, date: str):
 
 
 @router.get("/analyze/{code}")
-async def analyze_page(request: Request, code: str):
+async def analyze_page(request: Request, code: str, force: bool = False):
     code = code.zfill(6)
     # 提前拿一下名字，展示更友好
     name = code
@@ -140,7 +140,16 @@ async def analyze_page(request: Request, code: str):
             name = str(spot.iloc[0]["名称"])
     except Exception:
         pass
-    return render(request, "analyze.html", code=code, name=name, active="")
+    cached_html = None
+    if not force:
+        cached = load_cached_analysis(code)
+        if cached:
+            cached_html = _md(cached)
+    return render(
+        request, "analyze.html",
+        code=code, name=name, active="",
+        cached_html=cached_html,
+    )
 
 
 @router.post("/analyze/{code}/run")

@@ -138,32 +138,74 @@ def get_hist(code: str, days: int = 120) -> pd.DataFrame:
 
 
 def get_fund_flow(code: str) -> pd.DataFrame:
+    """个股资金流 —— eastmoney push2his 直连."""
     key = f"flow_{code}"
     cached = cache.get(key, HIST_TTL)
     if cached is not None:
         return pd.DataFrame(cached)
     try:
-        import akshare as ak
-        df = ak.stock_individual_fund_flow(stock=code, market="")
-        if not df.empty:
-            records = df.tail(10).to_dict("records")
+        url = (
+            f"https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get?"
+            f"lmt=30&klt=101&secid={_em_secid(code)}"
+            f"&fields1=f1&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65"
+        )
+        raw = curl_get(url, timeout=8)
+        data = json.loads(raw).get("data") or {}
+        klines = data.get("klines") or []
+        records = []
+        for line in klines:
+            fields = line.split(",")
+            if len(fields) < 15:
+                continue
+            records.append({
+                "日期": fields[0],
+                "主力净流入-净额": float(fields[1] or 0),
+                "小单净流入-净额": float(fields[2] or 0),
+                "中单净流入-净额": float(fields[3] or 0),
+                "大单净流入-净额": float(fields[4] or 0),
+                "超大单净流入-净额": float(fields[5] or 0),
+                "主力净流入-净占比": float(fields[6] or 0),
+                "收盘价": float(fields[11] or 0),
+                "涨跌幅": float(fields[12] or 0),
+            })
+        if records:
             cache.put(key, records)
-        return df
+        return pd.DataFrame(records)
     except Exception:
         return pd.DataFrame()
 
 
 def get_sector_flow() -> pd.DataFrame:
+    """行业板块资金流 —— eastmoney push2delay clist."""
     key = "sector_flow"
     cached = cache.get(key, SPOT_TTL * 5)
     if cached is not None:
         return pd.DataFrame(cached)
     try:
-        import akshare as ak
-        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
-        records = df.to_dict("records")
-        cache.put(key, records)
-        return df
+        url = (
+            "https://push2delay.eastmoney.com/api/qt/clist/get?"
+            "pn=1&pz=100&po=1&fltt=2&fid=f62&fs=m:90+t:2"
+            "&fields=f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78"
+        )
+        raw = curl_get(url, timeout=8)
+        data = json.loads(raw).get("data") or {}
+        diff = data.get("diff") or {}
+        # diff 是 {"0": {...}, "1": {...}}，需按 key 数字顺序取
+        rows = [diff[k] for k in sorted(diff.keys(), key=int)] if isinstance(diff, dict) else diff
+        records = []
+        for r in rows:
+            records.append({
+                "名称": r.get("f14") or "",
+                "代码": r.get("f12") or "",
+                "今日涨跌幅": float(r.get("f3") or 0),
+                "今日主力净流入-净额": float(r.get("f62") or 0),
+                "今日主力净流入-净占比": float(r.get("f184") or 0),
+                "今日超大单净流入-净额": float(r.get("f66") or 0),
+                "今日大单净流入-净额": float(r.get("f72") or 0),
+            })
+        if records:
+            cache.put(key, records)
+        return pd.DataFrame(records)
     except Exception:
         return pd.DataFrame()
 
@@ -203,9 +245,36 @@ def get_industry(code: str) -> str:
 
 
 def get_news(code: str) -> pd.DataFrame:
+    """个股新闻 —— eastmoney search-api-web 直连（10 条）."""
+    from urllib.parse import quote
+    param = (
+        '{"uid":"","keyword":"' + code +
+        '","type":["cmsArticleWebOld"],"client":"web","clientVersion":"curr",'
+        '"param":{"cmsArticleWebOld":{"searchScope":"default","sort":"default",'
+        '"pageIndex":1,"pageSize":10,"preTag":"","postTag":""}}}'
+    )
     try:
-        import akshare as ak
-        return ak.stock_news_em(symbol=code)
+        url = (
+            f"https://search-api-web.eastmoney.com/search/jsonp?"
+            f"cb=cb&param={quote(param)}"
+        )
+        raw = curl_get(url, timeout=8)
+        # 去 JSONP 外壳 cb({...})
+        if raw.startswith("cb("):
+            raw = raw[3:-1]
+        data = json.loads(raw)
+        arts = (data.get("result") or {}).get("cmsArticleWebOld") or []
+        records = []
+        for a in arts:
+            records.append({
+                "关键词": code,
+                "新闻标题": a.get("title") or "",
+                "新闻内容": a.get("content") or "",
+                "发布时间": a.get("date") or "",
+                "文章来源": a.get("mediaName") or "",
+                "新闻链接": a.get("url") or "",
+            })
+        return pd.DataFrame(records)
     except Exception:
         return pd.DataFrame()
 

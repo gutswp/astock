@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid grid-cols-3 gap-6">
-  <div class="col-span-2 space-y-4">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="md:col-span-2 lg:col-span-2 space-y-4">
 
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">预警管理</h1>
@@ -67,7 +67,7 @@
 
   </div>
 
-  <aside class="col-span-1">
+  <aside class="md:col-span-1 lg:col-span-1">
     <div class="card p-5 space-y-4">
       <div class="font-semibold">添加规则</div>
       <form method="post" action="/alerts/add" class="space-y-3">

@@ -1,7 +1,10 @@
+from datetime import datetime
+
 import anthropic
 from rich.console import Console
 from rich.markdown import Markdown
 
+from astock import DATA_DIR
 from astock.ai.client import make_client
 from astock.config import AppConfig
 from astock.data.provider import get_hist, get_spot, get_news
@@ -71,6 +74,25 @@ def _build_stock_context(code: str, config: AppConfig) -> str:
     return "\n".join(parts)
 
 
+def _cache_path(code: str) -> "pathlib.Path":
+    today = datetime.now().strftime("%Y-%m-%d")
+    return DATA_DIR / "reports" / f"{today}.analyze.{code}.md"
+
+
+def load_cached_analysis(code: str) -> str | None:
+    p = _cache_path(code.zfill(6))
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return None
+
+
+def _save_analysis(code: str, text: str) -> str:
+    p = _cache_path(code.zfill(6))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return str(p)
+
+
 def generate_analysis(code: str, config: AppConfig) -> str:
     """执行单股 AI 分析，返回 markdown 文本."""
     code = code.zfill(6)
@@ -94,6 +116,7 @@ def stream_analysis(code: str, config: AppConfig):
         yield ("stage", "调用 AI 分析")
 
         client = make_client()
+        buf = []
         with client.messages.stream(
             model=config.ai_model,
             max_tokens=config.ai_max_tokens,
@@ -101,9 +124,11 @@ def stream_analysis(code: str, config: AppConfig):
             messages=[{"role": "user", "content": f"请分析以下股票:\n\n{context}"}],
         ) as stream:
             for text in stream.text_stream:
+                buf.append(text)
                 yield ("chunk", text)
 
-        yield ("done", "")
+        path = _save_analysis(code, "".join(buf))
+        yield ("done", path)
     except Exception as e:
         yield ("error", str(e))
 

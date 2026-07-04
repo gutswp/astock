@@ -40,7 +40,12 @@
     a.nav-link { color: #94a3b8; padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
     a.nav-link:hover { color: #f8fafc; background: #1f2937; }
     a.nav-link.active { color: #f8fafc; background: #1f2937; }
-    table.data { width: 100%; font-size: 0.875rem; }
+    table.data { width: 100%; font-size: 0.875rem; min-width: 640px; }
+    .card { overflow-x: auto; }
+    @media (max-width: 768px) {
+      .kpi-value { font-size: 1.25rem; }
+      table.data th, table.data td { padding: 0.4rem 0.5rem; font-size: 0.75rem; }
+    }
     table.data th { text-align: left; color: #94a3b8; font-weight: 500; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1f2937; font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
     table.data td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #111827; }
     table.data tr:hover td { background: #0f172a; }
@@ -74,22 +79,23 @@
 </head>
 <body class="min-h-screen font-sans">
   <nav class="border-b border-gray-800 bg-surface-900/80 backdrop-blur sticky top-0 z-40">
-    <div class="max-w-[1400px] mx-auto flex items-center gap-6 px-6 py-3">
-      <a href="/" class="flex items-center gap-2 text-lg font-bold text-white">
+    <div class="max-w-[1400px] mx-auto flex items-center gap-3 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto">
+      <a href="/" class="flex items-center gap-1 text-lg font-bold text-white shrink-0">
         <span class="text-up">A</span><span>Stock</span>
       </a>
-      <div class="flex-1 flex gap-1">
+      <div class="flex-1 flex gap-1 whitespace-nowrap">
         <a class="nav-link {% if active == 'dashboard' %}active{% endif %}" href="/">仪表盘</a>
-        <a class="nav-link {% if active == 'scan' %}active{% endif %}" href="/scan">机会扫描</a>
-        <a class="nav-link {% if active == 'advise' %}active{% endif %}" href="/advise">AI 决策</a>
+        <a class="nav-link {% if active == 'scan' %}active{% endif %}" href="/scan">扫描</a>
+        <a class="nav-link {% if active == 'advise' %}active{% endif %}" href="/advise">决策</a>
         <a class="nav-link {% if active == 'review' %}active{% endif %}" href="/review">复盘</a>
-        <a class="nav-link {% if active == 'journal' %}active{% endif %}" href="/journal">交易日志</a>
+        <a class="nav-link {% if active == 'journal' %}active{% endif %}" href="/journal">日志</a>
         <a class="nav-link {% if active == 'alerts' %}active{% endif %}" href="/alerts">预警</a>
+        <a class="nav-link {% if active == 'tools' %}active{% endif %}" href="/tools/sizing">工具</a>
       </div>
-      <div class="text-xs text-gray-500 font-mono">{{ now|default("") }}</div>
+      <div class="text-xs text-gray-500 font-mono hidden md:block shrink-0">{{ now|default("") }}</div>
     </div>
   </nav>
-  <main class="max-w-[1400px] mx-auto px-6 py-6">
+  <main class="max-w-[1400px] mx-auto px-4 md:px-6 py-4 md:py-6">
     {% block content %}{% endblock %}
   </main>
   {% block scripts %}{% endblock %}

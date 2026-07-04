@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid grid-cols-4 gap-6">
-  <div class="col-span-3 space-y-4">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+  <div class="md:col-span-3 lg:col-span-3 space-y-4">
     <div class="card p-6 flex items-center justify-between">
       <div>
         <h1 class="text-lg font-semibold">AI 决策报告</h1>
@@ -21,7 +21,7 @@
       </div>
     </div>
   </div>
-  <aside class="col-span-1 space-y-2">
+  <aside class="md:col-span-1 lg:col-span-1 space-y-2">
     <div class="card">
       <div class="px-5 py-3 border-b border-gray-800 text-sm font-semibold">历史报告</div>
       {% if history %}

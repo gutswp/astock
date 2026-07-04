@@ -158,10 +158,12 @@ def scan(
     config: AppConfig,
     silent: bool = False,
     progress_cb=None,
+    should_stop=None,
 ) -> list[dict]:
     """核心扫描逻辑。
     silent=True 时不打印进度，供 advise 等其他命令复用。
     progress_cb: callable(stage: str, current: int, total: int) 用于 web 端进度回报。
+    should_stop: callable() -> bool，返回 True 时提前中止。
     """
     console = Console(quiet=silent)
 
@@ -203,6 +205,8 @@ def scan(
 
     if silent:
         for i, (_, row) in enumerate(candidates.iterrows(), start=1):
+            if should_stop and should_stop():
+                break
             signals, vol_ratio = _scan_stock(row["代码"], config)
             if signals:
                 _record_hit(row, signals, vol_ratio)
@@ -212,6 +216,8 @@ def scan(
         with Progress(console=console) as progress:
             task = progress.add_task("扫描中...", total=total)
             for i, (_, row) in enumerate(candidates.iterrows(), start=1):
+                if should_stop and should_stop():
+                    break
                 signals, vol_ratio = _scan_stock(row["代码"], config)
                 if signals:
                     _record_hit(row, signals, vol_ratio)

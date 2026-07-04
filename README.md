@@ -28,6 +28,20 @@ astock web --reload     # 开发模式，改代码/模板自动重载
 
 Web UI 包含所有 CLI 能力，仪表盘 = 持仓 + 大盘 + 行业 + 一键 AI 决策。
 
+后台预警守护（可选）：在 `config/settings.yaml` 里把 `alert_daemon.enabled` 改 `true`，
+web 起来后会按 interval 定时跑关注池，触发时走 `notify:` 配置的通道推送（Server 酱 / 邮件）。
+
+## Shell completion（可选）
+
+在 zsh 里 tab 补全账户名 / 股票代码 / alert 类型：
+
+```zsh
+# ~/.zshrc
+eval "$(_ASTOCK_COMPLETE=zsh_source astock)"
+```
+
+bash 同理，把 `zsh_source` 换成 `bash_source`。
+
 ## 命令（CLI）
 
 | 命令 | 用途 |
@@ -43,6 +57,11 @@ Web UI 包含所有 CLI 能力，仪表盘 = 持仓 + 大盘 + 行业 + 一键 A
 | `astock watch [--interval N]` | 单次/循环扫描关注池，触发时通知 |
 | `astock report` | 生成 Markdown 盘后报告到 `data/reports/` |
 | `astock buy/sell <code> <shares> <price> -a <acct> [-n "备注"]` | 记录交易 |
+
+## 分析工具
+
+- `/tools/sizing` —— 基于止损位反推建议手数（风险控制）
+- `/tools/backtest` —— MACD 金叉 / RSI 超卖 / MA20/60 突破 / KDJ 金叉 的历史胜率回测
 
 ## 数据源
 

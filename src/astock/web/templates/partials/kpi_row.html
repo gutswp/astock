@@ -1,5 +1,5 @@
 {% from "_macros.html" import money, pct, money_signed %}
-<div id="kpi-row" class="grid grid-cols-4 gap-4"
+<div id="kpi-row" class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
      hx-get="/partials/kpi" hx-trigger="every 60s" hx-swap="outerHTML">
   <div class="card p-5">
     <div class="kpi-label">总市值</div>

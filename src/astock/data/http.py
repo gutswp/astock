@@ -1,11 +1,39 @@
 import subprocess
+import threading
 import time
 from functools import wraps
+from urllib.parse import urlparse
 
 SINA_HEADERS = {"Referer": "https://finance.sina.com.cn"}
 
+# 节流：每个 host 最小间隔（秒），防被 eastmoney/sina 限流
+_MIN_INTERVAL = {
+    "push2delay.eastmoney.com": 0.12,
+    "push2his.eastmoney.com": 0.12,
+    "push2.eastmoney.com": 0.12,
+    "search-api-web.eastmoney.com": 0.2,
+    "hq.sinajs.cn": 0.05,
+}
+_DEFAULT_INTERVAL = 0.05
+_last_call: dict[str, float] = {}
+_lock = threading.Lock()
+
+
+def _throttle(host: str) -> None:
+    interval = _MIN_INTERVAL.get(host, _DEFAULT_INTERVAL)
+    with _lock:
+        last = _last_call.get(host, 0.0)
+        now = time.monotonic()
+        wait = last + interval - now
+        if wait > 0:
+            time.sleep(wait)
+        _last_call[host] = time.monotonic()
+
 
 def curl_get(url: str, headers: dict | None = None, timeout: int = 15, encoding: str = "utf-8") -> str:
+    host = urlparse(url).hostname or ""
+    if host:
+        _throttle(host)
     cmd = ["curl", "-s", "--connect-timeout", str(timeout), url]
     if headers:
         for k, v in headers.items():
