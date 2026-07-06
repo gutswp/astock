@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from statistics import mean
 
-_MIN_INDEX = 15  # 9:45 后才知道当日 label，之前不出信号
+_MIN_INDEX = 5  # 从 09:35 起扫全天。label 仍用 9:45 前 15 根算，但信号扫描不受限
 _TAIL_SUPPRESS_MINUTES = 5  # 14:55 后不出 buy
 _MAIN_LIMIT_PCT = 9.8  # 主板 10% 涨跌停留 0.2 安全垫
 _GEM_LIMIT_PCT = 19.8  # 创业板/科创板 20%
