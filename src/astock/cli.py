@@ -220,5 +220,28 @@ def watch(interval: int | None, notify: bool) -> None:
     run_watch(interval=interval, notify=notify)
 
 
+@cli.command()
+@click.option("--interval", "-i", default=30, type=int, help="刷新间隔秒数（默认 30）")
+@click.option("--threshold", "-t", default=3.0, type=float, help="涨跌幅报警阈值%（默认 3.0）")
+@click.option("--notify/--no-notify", default=True, help="异动时是否发 macOS 桌面通知")
+@click.pass_context
+def ding(ctx: click.Context, interval: int, threshold: float, notify: bool) -> None:
+    """盯盘模式：实时刷新持仓价格，异动报警。"""
+    from astock.screen.holdings_watcher import run_holdings_watch
+
+    run_holdings_watch(ctx.obj["config"], interval=interval, change_threshold=threshold, notify=notify)
+
+
+@cli.command()
+@click.argument("codes", nargs=-1, required=False)
+@click.pass_context
+def tscore(ctx: click.Context, codes: tuple[str, ...]) -> None:
+    """开盘15分钟强弱评分：自动判定持仓股今日强势/弱势/震荡 + 做T策略。"""
+    from astock.screen.t_trading import run_tscore
+
+    code_list = list(codes) if codes else None
+    run_tscore(ctx.obj["config"], codes=code_list)
+
+
 if __name__ == "__main__":
     cli()

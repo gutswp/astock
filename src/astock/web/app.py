@@ -21,6 +21,7 @@ from astock.web.routes import (
     scan as scan_routes,
     tools as tools_routes,
     trade as trade_routes,
+    tscore as tscore_routes,
 )
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -55,6 +56,7 @@ app.include_router(alerts_routes.router)
 app.include_router(api_routes.router)
 app.include_router(export_routes.router)
 app.include_router(tools_routes.router)
+app.include_router(tscore_routes.router)
 
 
 @app.get("/health")

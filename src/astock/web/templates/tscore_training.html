@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-4">
+  <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-bold">做T训练</h1>
+      <div class="text-sm text-gray-400">先看开盘前 15 分钟走势，先猜强弱，再展开看答案和做T建议。</div>
+    </div>
+    <a href="/tscore" class="btn btn-ghost">返回评分页</a>
+  </div>
+
+  <form method="get" action="/tscore/training" class="card p-4 flex flex-wrap items-end gap-3">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">股票代码</label>
+      <input name="code" value="{{ code }}" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm font-mono w-36" placeholder="000063">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">交易日</label>
+      <select name="day" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm min-w-40">
+        <option value="">最近一个交易日</option>
+        {% if case %}
+          {% for d in case.available_dates|reverse %}
+            <option value="{{ d }}" {% if d == case.date %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </div>
+    <button class="btn btn-primary" type="submit">换一题</button>
+  </form>
+
+  {% if error %}
+  <div class="card p-6 text-sm text-red-300">{{ error }}</div>
+  {% elif case %}
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+    <div class="xl:col-span-2 space-y-4">
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <div class="font-semibold text-white">{{ case.code }} · {{ case.date }}</div>
+            <div class="text-xs text-gray-500">样本仅展示 9:30–9:45 的收盘线和均价线</div>
+          </div>
+          <div class="text-xs text-gray-400">昨收 {{ "%.2f"|format(case.preclose) }}</div>
+        </div>
+        <div style="height:320px" id="tscore-training-chart"></div>
+      </div>
+
+      <div class="card p-4">
+        <div class="font-semibold mb-3">先给自己一个判断</div>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+          {% for label in labels %}
+          <button type="button" class="guess-btn btn btn-ghost justify-center" data-label="{{ label }}">{{ label }}</button>
+          {% endfor %}
+        </div>
+        <div id="guess-result" class="text-sm text-gray-400">先选一个标签，再点下方“揭晓答案”。</div>
+        <button type="button" id="reveal-btn" class="btn btn-primary mt-4">揭晓答案</button>
+      </div>
+
+      <div id="replay-panel" class="card p-4 hidden">
+        <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
+          <div>
+            <div class="font-semibold text-white">揭晓后的全天复盘</div>
+            <div class="text-xs text-gray-500">看 9:45 之后市场怎么走，训练“开盘判断 → 后续演化”的连接感</div>
+          </div>
+          <div class="text-xs text-gray-400">揭晓时价格 {{ "%.2f"|format(case.reveal_price) }}</div>
+        </div>
+        <div style="height:340px" id="tscore-replay-chart"></div>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div id="answer-panel" class="card p-4 hidden">
+        <div class="flex items-center justify-between mb-3">
+          <div class="font-semibold">标准答案</div>
+          <span class="badge">{{ case.label }} {{ "%+d"|format(case.score) }}</span>
+        </div>
+        <div class="text-sm text-gray-300 mb-3">{{ case.strategy }}</div>
+        <div class="grid grid-cols-1 gap-2 text-sm mb-4">
+          <div class="flex items-center justify-between rounded bg-gray-900/60 px-3 py-2">
+            <span class="text-gray-400">9:45 后最高</span>
+            <span class="num {% if case.post_open_high_pct > 0 %}pos{% elif case.post_open_high_pct < 0 %}neg{% endif %}">{{ "%+.2f%%"|format(case.post_open_high_pct) }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded bg-gray-900/60 px-3 py-2">
+            <span class="text-gray-400">9:45 后最低</span>
+            <span class="num {% if case.post_open_low_pct > 0 %}pos{% elif case.post_open_low_pct < 0 %}neg{% endif %}">{{ "%+.2f%%"|format(case.post_open_low_pct) }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded bg-gray-900/60 px-3 py-2">
+            <span class="text-gray-400">尾盘相对 9:45</span>
+            <span class="num {% if case.post_open_close_pct > 0 %}pos{% elif case.post_open_close_pct < 0 %}neg{% endif %}">{{ "%+.2f%%"|format(case.post_open_close_pct) }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded bg-gray-900/60 px-3 py-2">
+            <span class="text-gray-400">全天相对昨收</span>
+            <span class="num {% if case.day_change_pct > 0 %}pos{% elif case.day_change_pct < 0 %}neg{% endif %}">{{ "%+.2f%%"|format(case.day_change_pct) }}</span>
+          </div>
+        </div>
+        <table class="data text-sm">
+          <thead>
+            <tr><th>指标</th><th class="text-center">分数</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            {% for indicator, pts, desc in case.details %}
+            <tr>
+              <td class="text-gray-400">{{ indicator }}</td>
+              <td class="text-center font-bold num {% if pts|int > 0 %}pos{% elif pts|int < 0 %}neg{% endif %}">{{ pts }}</td>
+              <td class="text-gray-300">{{ desc }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card p-4 text-sm text-gray-400">
+        <div class="font-semibold text-white mb-2">训练要点</div>
+        <ul class="list-disc ml-4 space-y-1">
+          <li>先看价格相对均价线的位置，不要先入为主。</li>
+          <li>再看高低点是否同步抬高/下移。</li>
+          <li>最后结合量能和首波方向，决定是正T、倒T还是不做。</li>
+          <li>揭晓后重点看 9:45 之后有没有继续强化，校准你的第一反应。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if case %}
+<script>
+(function () {
+  const closes = {{ case.close_points|tojson }};
+  const vwaps = {{ case.vwap_points|tojson }};
+  const labels = {{ case.time_labels|tojson }};
+  const fullCloses = {{ case.full_close_points|tojson }};
+  const fullVwaps = {{ case.full_vwap_points|tojson }};
+  const fullLabels = {{ case.full_time_labels|tojson }};
+  const answer = {{ case.label|tojson }};
+  const score = {{ case.score|tojson }};
+
+  const chart = echarts.init(document.getElementById('tscore-training-chart'), 'dark');
+  chart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    tooltip: {trigger: 'axis'},
+    legend: {top: 0, textStyle: {color: '#94a3b8'}, data: ['收盘', '均价线']},
+    grid: {left: 40, right: 20, top: 40, bottom: 30},
+    xAxis: {
+      type: 'category',
+      data: labels,
+      axisLine: {lineStyle: {color: '#374151'}},
+      axisLabel: {color: '#94a3b8'}
+    },
+    yAxis: {
+      scale: true,
+      axisLine: {show: false},
+      axisLabel: {color: '#94a3b8'},
+      splitLine: {lineStyle: {color: '#1f2937'}}
+    },
+    series: [
+      {name: '收盘', type: 'line', data: closes, smooth: true, symbol: 'circle', symbolSize: 6, lineStyle: {width: 2, color: '#f87171'}, itemStyle: {color: '#f87171'}},
+      {name: '均价线', type: 'line', data: vwaps, smooth: true, symbol: 'none', lineStyle: {width: 2, color: '#60a5fa'}}
+    ]
+  });
+
+  const replayChart = echarts.init(document.getElementById('tscore-replay-chart'), 'dark');
+  replayChart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    tooltip: {trigger: 'axis'},
+    legend: {top: 0, textStyle: {color: '#94a3b8'}, data: ['全天收盘', '全天均价线']},
+    grid: {left: 40, right: 20, top: 40, bottom: 30},
+    xAxis: {
+      type: 'category',
+      data: fullLabels,
+      axisLine: {lineStyle: {color: '#374151'}},
+      axisLabel: {color: '#94a3b8'}
+    },
+    yAxis: {
+      scale: true,
+      axisLine: {show: false},
+      axisLabel: {color: '#94a3b8'},
+      splitLine: {lineStyle: {color: '#1f2937'}}
+    },
+    series: [
+      {name: '全天收盘', type: 'line', data: fullCloses, smooth: true, symbol: 'none', lineStyle: {width: 2, color: '#f87171'}},
+      {name: '全天均价线', type: 'line', data: fullVwaps, smooth: true, symbol: 'none', lineStyle: {width: 2, color: '#60a5fa'}}
+    ]
+  });
+
+  window.addEventListener('resize', () => {
+    chart.resize();
+    replayChart.resize();
+  });
+
+  let guessed = '';
+  const guessBtns = Array.from(document.querySelectorAll('.guess-btn'));
+  const guessResult = document.getElementById('guess-result');
+  const answerPanel = document.getElementById('answer-panel');
+  const replayPanel = document.getElementById('replay-panel');
+  const revealBtn = document.getElementById('reveal-btn');
+
+  guessBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      guessed = btn.dataset.label;
+      guessBtns.forEach(x => x.classList.remove('btn-primary'));
+      guessBtns.forEach(x => x.classList.add('btn-ghost'));
+      btn.classList.remove('btn-ghost');
+      btn.classList.add('btn-primary');
+      guessResult.textContent = '你当前的判断：' + guessed;
+    });
+  });
+
+  revealBtn.addEventListener('click', () => {
+    answerPanel.classList.remove('hidden');
+    replayPanel.classList.remove('hidden');
+    replayChart.resize();
+    if (!guessed) {
+      guessResult.textContent = '标准答案：' + answer + '（得分 ' + (score > 0 ? '+' : '') + score + '）';
+      return;
+    }
+    if (guessed === answer) {
+      guessResult.textContent = '判断正确：' + guessed + '。';
+      return;
+    }
+    guessResult.textContent = '你的判断：' + guessed + '；标准答案：' + answer + '（得分 ' + (score > 0 ? '+' : '') + score + '）';
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
 
+from astock.config import load_config
 from astock.data.provider import get_indices
 from astock.portfolio.journal import load_trades
 from astock.portfolio.manager import build_portfolio
@@ -52,17 +53,20 @@ def _dashboard_context(config) -> dict:
 
 @router.get("/")
 async def dashboard(request: Request):
+    request.app.state.config = load_config()
     ctx = _dashboard_context(request.app.state.config)
     return render(request, "dashboard.html", active="dashboard", **ctx)
 
 
 @router.get("/partials/portfolio")
 async def portfolio_partial(request: Request):
+    request.app.state.config = load_config()
     ctx = _dashboard_context(request.app.state.config)
     return render(request, "partials/portfolio_table.html", **ctx)
 
 
 @router.get("/partials/kpi")
 async def kpi_partial(request: Request):
+    request.app.state.config = load_config()
     ctx = _dashboard_context(request.app.state.config)
     return render(request, "partials/kpi_row.html", **ctx)
