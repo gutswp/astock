@@ -284,6 +284,69 @@ def test_detect_max_three_pairs():
     assert len(paired) <= 6, f"最多 3 对 = 6 个信号，实际 {len(paired)}"
 
 
+def test_detect_rejects_losing_pair_weak():
+    """弱势正T：买 10.30 → 卖 10.10 是"高买低卖"，赔钱，应丢弃."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "buy", "reason": "缩量止跌"},
+        {"index": 25, "time": "09:55", "price": 10.10, "type": "sell", "reason": "跌破均价线"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.02, max_pairs=3)
+    # buy 保留为未配对，赔钱 sell 被丢
+    assert [s["type"] for s in paired] == ["buy"], f"高买低卖应丢弃，实际 {paired}"
+
+
+def test_detect_rejects_losing_pair_strong():
+    """强势倒T：卖 10.10 → 买 10.30 是"卖低买高"，赔钱，应丢弃."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.10, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 25, "time": "09:55", "price": 10.30, "type": "buy", "reason": "缩量止跌"},
+    ]
+    paired = _pair_and_limit(raw, "强势", min_gap=0.02, max_pairs=3)
+    assert [s["type"] for s in paired] == ["sell"], f"卖低买高应丢弃，实际 {paired}"
+
+
+def test_detect_rejects_losing_pair_shock():
+    """震荡日：赔钱对也要丢，未配的单边保留."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "buy", "reason": "不再创新低"},
+        {"index": 25, "time": "09:55", "price": 10.10, "type": "sell", "reason": "冲高不创新高"},
+    ]
+    paired = _pair_and_limit(raw, "震荡", min_gap=0.02, max_pairs=3)
+    types = [s["type"] for s in paired]
+    assert "sell" not in types or not (paired and paired[0]["price"] > paired[1]["price"]), \
+        f"高买低卖应丢弃，实际 {paired}"
+
+
+def test_detect_keeps_best_pending_buy():
+    """弱势买pending：连续 3 个 buy 候选，保留价格最低那个（更好的正T入场）."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "buy", "reason": "缩量止跌"},
+        {"index": 20, "time": "09:50", "price": 10.10, "type": "buy", "reason": "不再创新低"},
+        {"index": 25, "time": "09:55", "price": 10.20, "type": "buy", "reason": "缩量止跌"},
+        {"index": 30, "time": "10:00", "price": 10.35, "type": "sell", "reason": "冲高不创新高"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.02, max_pairs=3)
+    # 应配对 buy@10.10（最低）+ sell@10.35，profit 0.25
+    assert len(paired) == 2
+    assert paired[0]["type"] == "buy" and paired[0]["price"] == 10.10
+    assert paired[1]["type"] == "sell" and paired[1]["price"] == 10.35
+
+
+def test_detect_keeps_best_pending_sell():
+    """强势卖pending：连续 3 个 sell 候选，保留价格最高那个（更好的倒T卖出价）."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.20, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 20, "time": "09:50", "price": 10.35, "type": "sell", "reason": "放量滞涨"},
+        {"index": 25, "time": "09:55", "price": 10.25, "type": "sell", "reason": "跌破均价线"},
+        {"index": 30, "time": "10:00", "price": 10.10, "type": "buy", "reason": "缩量止跌"},
+    ]
+    paired = _pair_and_limit(raw, "强势", min_gap=0.02, max_pairs=3)
+    # 应配对 sell@10.35（最高）+ buy@10.10，profit 0.25
+    assert len(paired) == 2
+    assert paired[0]["type"] == "sell" and paired[0]["price"] == 10.35
+    assert paired[1]["type"] == "buy" and paired[1]["price"] == 10.10
+
+
 def test_detect_tail_suppresses_buys():
     # 构造尾盘 buy 场景，1455 之后应被过滤
     bars = _flat_am_baseline(15, close=10.20, vol=1000)

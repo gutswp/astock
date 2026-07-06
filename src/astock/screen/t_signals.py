@@ -348,6 +348,21 @@ def _pair_and_limit(
     return _enforce_min_gap_bidir(ordered, _resolve_gap, max_signals)
 
 
+def _profit(buy_sig: dict, sell_sig: dict) -> float:
+    """T+0 一对的利差：卖价 - 买价（正 = 盈利）."""
+    return sell_sig["price"] - buy_sig["price"]
+
+
+def _better_first(existing: dict, new: dict) -> dict:
+    """同类新旧择优：
+    - sell pending 保留价高的（倒T 卖得越高越好）
+    - buy pending 保留价低的（正T 买得越低越好）
+    """
+    if existing["type"] == "sell":
+        return new if new["price"] > existing["price"] else existing
+    return new if new["price"] < existing["price"] else existing
+
+
 def _enforce_min_gap(
     ordered: list[dict],
     first_type: str,
@@ -355,10 +370,10 @@ def _enforce_min_gap(
     resolve_gap,
     max_signals: int,
 ) -> list[dict]:
-    """先 first_type 后 second_type 尝试配对；早于 first 的 second 违反 label 意图，丢弃。
+    """先 first_type 后 second_type 尝试配对。
 
-    做T 逻辑上，连续买/连续卖没意义 —— 未完成配对时新 first 覆盖旧 pending
-    （代表 trader 应该用最新价加仓/挂新单）。只有配对完成后才开启下一轮。
+    关键约束：只接受盈利对（sell 价 - buy 价 ≥ gap）。方向反了（高买低卖 /
+    卖低买高）的对直接跳过，不叫做T。
     """
     kept: list[dict] = []
     pending_first: dict | None = None
@@ -366,16 +381,18 @@ def _enforce_min_gap(
         if len(kept) >= max_signals:
             break
         if s["type"] == first_type:
-            pending_first = s  # 用最新的 first 作 pending，不累积历史
+            pending_first = s if pending_first is None else _better_first(pending_first, s)
         elif s["type"] == second_type:
             if pending_first is None:
                 continue  # 违反 label 顺序，跳过
+            buy_sig = pending_first if first_type == "buy" else s
+            sell_sig = s if first_type == "buy" else pending_first
             gap = resolve_gap(pending_first["price"])
-            if abs(s["price"] - pending_first["price"]) >= gap:
+            if _profit(buy_sig, sell_sig) >= gap:
                 kept.append(pending_first)
                 kept.append(s)
                 pending_first = None
-            # else 差价不够
+            # else: 不盈利，忽略当根 second，继续等更好的对手方
     if pending_first is not None and len(kept) < max_signals:
         kept.append(pending_first)
     return kept[:max_signals]
@@ -384,7 +401,7 @@ def _enforce_min_gap(
 def _enforce_min_gap_bidir(
     ordered: list[dict], resolve_gap, max_signals: int
 ) -> list[dict]:
-    """震荡：接受任意起手，贪心配对；未配的也保留."""
+    """震荡：接受任意起手，但仍要求配对盈利（sell 价 - buy 价 ≥ gap）."""
     kept: list[dict] = []
     pending: dict | None = None
     for s in ordered:
@@ -394,15 +411,16 @@ def _enforce_min_gap_bidir(
             pending = s
             continue
         if s["type"] != pending["type"]:
+            buy_sig = pending if pending["type"] == "buy" else s
+            sell_sig = s if pending["type"] == "buy" else pending
             gap = resolve_gap(pending["price"])
-            if abs(s["price"] - pending["price"]) >= gap:
+            if _profit(buy_sig, sell_sig) >= gap:
                 kept.append(pending)
                 kept.append(s)
                 pending = None
-            # else 差价不够
+            # else 方向不对或差价不够，忽略当根，继续等
         else:
-            kept.append(pending)
-            pending = s
+            pending = _better_first(pending, s)
     if pending is not None and len(kept) < max_signals:
         kept.append(pending)
     return kept[:max_signals]
