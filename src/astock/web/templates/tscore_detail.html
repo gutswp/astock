@@ -77,33 +77,34 @@
       <table class="data text-sm" id="signal-table">
         <thead>
           <tr>
-            <th class="text-center">配对</th>
+            <th class="text-center">编号</th>
             <th>时间</th>
             <th class="text-center">类型</th>
             <th class="text-right">价格</th>
             <th>依据</th>
-            <th class="text-right">对手方</th>
+            <th class="text-center">配对</th>
+            <th class="text-right">Δ 差价</th>
           </tr>
         </thead>
         <tbody>
-          {% set sig_by_seq_type = {} %}
           {% for s in r.signals %}
-            {% set _ = sig_by_seq_type.update({(s.seq, s.type): s}) %}
-          {% endfor %}
-          {% for s in r.signals %}
-          {% set opp = sig_by_seq_type.get((s.seq, 'sell' if s.type == 'buy' else 'buy')) %}
           <tr>
             <td class="text-center font-bold {% if s.type == 'buy' %}pos{% else %}neg{% endif %}">{{ s.marker }}</td>
             <td class="font-mono">{{ s.time }}</td>
             <td class="text-center">{% if s.type == 'buy' %}<span class="pos">买</span>{% else %}<span class="neg">卖</span>{% endif %}</td>
             <td class="text-right num">{{ "%.2f"|format(s.price) }}</td>
             <td class="text-gray-300">{{ s.reason }}</td>
-            <td class="text-right num text-xs">
-              {% if opp %}
-                {% set profit = (opp.price - s.price) if s.type == 'buy' else (s.price - opp.price) %}
-                <span class="{% if profit > 0 %}pos{% else %}neg{% endif %}">Δ {{ "%+.2f"|format(profit) }}</span>
+            <td class="text-center">
+              {% if s.partner %}
+                <span class="{% if 'buy' == s.type %}neg{% else %}pos{% endif %}">↔ {{ s.partner }}</span>
               {% else %}
                 <span class="text-gray-600">未配对</span>
+              {% endif %}
+            </td>
+            <td class="text-right num text-xs">
+              {% if s.partner %}
+                {% set profit = (s.partner_price - s.price) if s.type == 'buy' else (s.price - s.partner_price) %}
+                <span class="{% if profit > 0 %}pos{% else %}neg{% endif %}">{{ "%+.2f"|format(profit) }}</span>
               {% endif %}
             </td>
           </tr>

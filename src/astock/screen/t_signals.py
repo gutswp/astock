@@ -525,42 +525,38 @@ def _enforce_min_gap_bidir(
 
 
 def _assign_seq(signals: list[dict]) -> list[dict]:
-    """按 pair 编号：同一 pair 的红/绿共享同一数字（例如 pair 1 = 红1+绿1）。
-    未配对信号在所有 pair 之后单独编号。"""
+    """按时间序编号（每类独立）：红1=最早的买、绿1=最早的卖。
+
+    pair_id 保留在字段里给前端表格展示"配对"信息。
+    """
     ordered = sorted(signals, key=lambda x: x["index"])
 
-    # 收集所有 pair_id，按最早出现时间排序 → 重编号 1..N
-    pair_min_idx: dict[int, int] = {}
-    for s in ordered:
-        pid = s.get("pair_id")
-        if pid is None:
-            continue
-        if pid not in pair_min_idx or s["index"] < pair_min_idx[pid]:
-            pair_min_idx[pid] = s["index"]
-    sorted_pids = sorted(pair_min_idx, key=lambda p: pair_min_idx[p])
-    remap = {old: new for new, old in enumerate(sorted_pids, 1)}
-
-    unpaired_buy = 0
-    unpaired_sell = 0
-    n_pairs = len(sorted_pids)
-
+    buy_n = 0
+    sell_n = 0
     out: list[dict] = []
     for s in ordered:
         s = dict(s)
+        if s["type"] == "buy":
+            buy_n += 1
+            s["seq"] = buy_n
+        else:
+            sell_n += 1
+            s["seq"] = sell_n
+        s["marker"] = f"红{s['seq']}" if s["type"] == "buy" else f"绿{s['seq']}"
+        s["note"] = f"{s['marker']} · {s['reason']} @ {s['price']:.2f}"
+        # pair_id 保留供前端配对展示
+        out.append(s)
+
+    # 补一步：用 pair_id 把每根信号的 "对手 marker" 计算出来，方便前端展示
+    pair_map: dict[int, list[dict]] = {}
+    for s in out:
         pid = s.get("pair_id")
         if pid is not None:
-            seq = remap[pid]
-        else:
-            if s["type"] == "buy":
-                unpaired_buy += 1
-                seq = n_pairs + unpaired_buy
-            else:
-                unpaired_sell += 1
-                seq = n_pairs + unpaired_sell
-        s["seq"] = seq
-        s["marker"] = f"红{seq}" if s["type"] == "buy" else f"绿{seq}"
-        s["note"] = f"{s['marker']} · {s['reason']} @ {s['price']:.2f}"
-        # 清掉内部字段
-        s.pop("pair_id", None)
-        out.append(s)
+            pair_map.setdefault(pid, []).append(s)
+    for pid, group in pair_map.items():
+        if len(group) == 2:
+            group[0]["partner"] = group[1]["marker"]
+            group[0]["partner_price"] = group[1]["price"]
+            group[1]["partner"] = group[0]["marker"]
+            group[1]["partner_price"] = group[0]["price"]
     return out
