@@ -174,14 +174,14 @@ def _push_new_signals(code: str, snap: dict[str, Any]) -> None:
         _WARMED_UP.add(code)
 
     def _bucket(hhmm: str, minutes: int = 15) -> int:
-        """把 HH:MM 归到 minutes 分钟桶。同一 15min 窗口内同类信号只推 1 次。"""
+        """（已弃用）15 分钟桶。当前只按 bar_time 精确 dedup。"""
         hh, mm = int(hhmm[:2]), int(hhmm[3:5])
         return (hh * 60 + mm) // minutes
 
     for s in signals:
-        # 15 分钟桶 dedup：DP 每 5s 重选可能反复推同一 pair 的不同版本 buy
-        # 用 15 min 桶把它们合并为一条推送
-        key = (code, date_str, _bucket(s["time"]), s["type"])
+        # 按 bar_time 精确 dedup —— DP 每 5s 重选新的更优 buy/sell 都会推
+        # 用户可能收到"同一 T 时机的多个价格版本"，这是有意为之：让用户不错过任何机会
+        key = (code, date_str, s["time"], s["type"])
         with _PUSH_LOCK:
             if key in _PUSHED_PAIRS:
                 continue
