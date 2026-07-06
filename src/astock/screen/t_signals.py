@@ -340,39 +340,15 @@ def detect_signals(
     # 同类去噪：相邻 <5 根，保留优先级更高的（避免消化盘上买点连续触发）
     deduped = _dedup_same_type(raw, gap=5)
 
-    # 两遍配对：优先保留手册外的极值信号（急拉尖顶/急跌捶底），再用手册 6 类补齐
-    high_pri = [s for s in deduped if s["reason"] in _HIGH_PRIORITY_REASONS]
-    regular = [s for s in deduped if s["reason"] not in _HIGH_PRIORITY_REASONS]
-
-    hp_paired = _pair_and_limit(
-        high_pri, label,
+    # 关键：做 T 严格闭合 —— 每组买卖必须完成后才能开下一组，不允许时间重叠。
+    # 用 DP 选 K=3 个不重叠、盈利、方向正确的对，总利润最大化。
+    paired = _pair_and_limit(
+        deduped, label,
         min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs,
-        min_gap_override=min_gap, max_pairs=3, pair_id_start=1,
+        min_gap_override=min_gap, max_pairs=3,
     )
 
-    used_slots = len(hp_paired)
-    hp_next_pair = max((s.get("pair_id", 0) for s in hp_paired), default=0) + 1
-    remaining = max(0, 6 - used_slots)
-    if remaining > 0 and regular:
-        # 剔除与极值信号时间相近（±10 根）的手册信号，避免同时段重复标注
-        hp_indices = [s["index"] for s in hp_paired]
-
-        def _far_enough(s: dict) -> bool:
-            return all(abs(s["index"] - hi) >= 10 for hi in hp_indices)
-
-        regular_far = [s for s in regular if _far_enough(s)]
-        reg_paired = _pair_and_limit(
-            regular_far, label,
-            min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs,
-            min_gap_override=min_gap,
-            max_pairs=remaining // 2 if remaining >= 2 else 1,
-            pair_id_start=hp_next_pair,
-        )
-        paired = hp_paired + reg_paired
-    else:
-        paired = hp_paired
-
-    # 按 pair 编号（同一 pair 的红/绿共享同一数字）
+    # 按时间序编号（红1=最早买、绿1=最早卖），配对信息作为 partner 字段附加
     return _assign_seq(paired)
 
 
@@ -412,29 +388,122 @@ def _pair_and_limit(
     # 兼容 tests 里以关键字 min_gap= 传入
     min_gap: float | None = None,
 ) -> list[dict]:
-    """按 label 偏好配对：差价 < 有效 min_gap 的对被丢，未配对的单边信号保留。
+    """做 T 严格闭合配对：K 组不重叠、方向正确、盈利足够、总利润最大化。
 
-    有效 min_gap: 优先 min_gap_override / min_gap；否则 max(min_gap_abs, price * min_gap_pct)。
-    最多 max_pairs * 2 = 6 个信号。配对成功的两根共享 pair_id（从 pair_id_start 开始）。
+    用 DP 从所有候选 (buy_i, sell_j) 对中选 K=3 组：
+    - 每组内 buy 时间必须 < sell 时间（弱势/偏弱）或 sell < buy（强势/偏强）
+    - 每组必须闭合：pair_A.end < pair_B.start（不允许在 pair_A 未平仓时开 pair_B）
+    - sell.price - buy.price ≥ 有效 min_gap
+    - 目标：3 组总盈利最大
+
+    弱势/偏弱 → 只允许"先买后卖"（正 T）
+    强势/偏强 → 只允许"先卖后买"（倒 T）
+    震荡 → 两种方向都允许，每组仍需闭合
     """
     if not signals:
         return []
 
     override = min_gap_override if min_gap_override is not None else min_gap
 
-    def _resolve_gap(first_price: float) -> float:
+    def _resolve_gap(price: float) -> float:
         if override is not None:
             return override
-        return max(min_gap_abs, first_price * min_gap_pct)
-
-    ordered = sorted(signals, key=lambda s: s["index"])
-    max_signals = max_pairs * 2
+        return max(min_gap_abs, price * min_gap_pct)
 
     if label in {"强势", "偏强"}:
-        return _enforce_min_gap(ordered, "sell", "buy", _resolve_gap, max_signals, pair_id_start)
-    if label in {"弱势", "偏弱"}:
-        return _enforce_min_gap(ordered, "buy", "sell", _resolve_gap, max_signals, pair_id_start)
-    return _enforce_min_gap_bidir(ordered, _resolve_gap, max_signals, pair_id_start)
+        allowed_dirs = [("sell", "buy")]
+    elif label in {"弱势", "偏弱"}:
+        allowed_dirs = [("buy", "sell")]
+    else:
+        allowed_dirs = [("buy", "sell"), ("sell", "buy")]
+
+    ordered = sorted(signals, key=lambda s: s["index"])
+    n = len(ordered)
+    candidates: list[dict] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = ordered[i], ordered[j]
+            for first_type, second_type in allowed_dirs:
+                if a["type"] != first_type or b["type"] != second_type:
+                    continue
+                buy_sig = a if first_type == "buy" else b
+                sell_sig = b if first_type == "buy" else a
+                profit = sell_sig["price"] - buy_sig["price"]
+                gap = _resolve_gap(a["price"])
+                if profit >= gap:
+                    candidates.append({
+                        "first": a,
+                        "second": b,
+                        "start": a["index"],
+                        "end": b["index"],
+                        "profit": profit,
+                    })
+                break  # 一个方向匹配即可
+
+    selected = _select_non_overlapping(candidates, max_pairs)
+
+    flat: list[dict] = []
+    for offset, pair in enumerate(selected):
+        pid = pair_id_start + offset
+        first_sig = dict(pair["first"])
+        second_sig = dict(pair["second"])
+        first_sig["pair_id"] = pid
+        second_sig["pair_id"] = pid
+        flat.append(first_sig)
+        flat.append(second_sig)
+    return flat
+
+
+def _select_non_overlapping(pairs: list[dict], max_k: int) -> list[dict]:
+    """DP：从 pairs 中选 ≤ max_k 个不重叠对，总 profit 最大。
+
+    经典加权区间调度 + K 个上限：按 end 排序 → bisect 找 prev 兼容 →
+    dp[i][k] = max profit using first i pairs with ≤ k selected。
+    """
+    if not pairs or max_k <= 0:
+        return []
+
+    import bisect
+
+    sorted_pairs = sorted(pairs, key=lambda p: p["end"])
+    n = len(sorted_pairs)
+    ends = [p["end"] for p in sorted_pairs]
+
+    # prev_valid[i] = 最大 j 使得 sorted_pairs[j].end < sorted_pairs[i].start
+    # 即 pair j 完全结束在 pair i 开始之前
+    prev_valid: list[int] = []
+    for i in range(n):
+        target = sorted_pairs[i]["start"]
+        j = bisect.bisect_left(ends, target) - 1
+        prev_valid.append(j)
+
+    # dp[i][k]：用 pairs[0..i-1] 选最多 k 个的最大 profit
+    dp = [[0.0] * (max_k + 1) for _ in range(n + 1)]
+    took = [[False] * (max_k + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for kk in range(max_k + 1):
+            dp[i][kk] = dp[i - 1][kk]  # skip pair i-1
+            took[i][kk] = False
+            if kk >= 1:
+                pi = prev_valid[i - 1]
+                take = dp[pi + 1][kk - 1] + sorted_pairs[i - 1]["profit"]
+                if take > dp[i][kk]:
+                    dp[i][kk] = take
+                    took[i][kk] = True
+
+    best_k = max(range(max_k + 1), key=lambda kk: dp[n][kk])
+
+    selected: list[dict] = []
+    i, kk = n, best_k
+    while i > 0 and kk > 0:
+        if took[i][kk]:
+            selected.append(sorted_pairs[i - 1])
+            i = prev_valid[i - 1] + 1
+            kk -= 1
+        else:
+            i -= 1
+
+    return sorted(selected, key=lambda p: p["start"])
 
 
 def _profit(buy_sig: dict, sell_sig: dict) -> float:
@@ -452,76 +521,14 @@ def _better_first(existing: dict, new: dict) -> dict:
     return new if new["price"] < existing["price"] else existing
 
 
-def _enforce_min_gap(
-    ordered: list[dict],
-    first_type: str,
-    second_type: str,
-    resolve_gap,
-    max_signals: int,
-    pair_id_start: int = 1,
-) -> list[dict]:
-    """先 first_type 后 second_type 尝试配对。
-
-    关键约束：只接受盈利对（sell 价 - buy 价 ≥ gap）。方向反了（高买低卖 /
-    卖低买高）的对直接跳过，不叫做T。配对成功的两根都打上共同的 pair_id。
-    """
-    kept: list[dict] = []
-    pending_first: dict | None = None
-    next_pair = pair_id_start
-    for s in ordered:
-        if len(kept) >= max_signals:
-            break
-        if s["type"] == first_type:
-            pending_first = s if pending_first is None else _better_first(pending_first, s)
-        elif s["type"] == second_type:
-            if pending_first is None:
-                continue  # 违反 label 顺序，跳过
-            buy_sig = pending_first if first_type == "buy" else s
-            sell_sig = s if first_type == "buy" else pending_first
-            gap = resolve_gap(pending_first["price"])
-            if _profit(buy_sig, sell_sig) >= gap:
-                pending_first["pair_id"] = next_pair
-                s["pair_id"] = next_pair
-                next_pair += 1
-                kept.append(pending_first)
-                kept.append(s)
-                pending_first = None
-            # else: 不盈利，忽略当根 second，继续等更好的对手方
-    if pending_first is not None and len(kept) < max_signals:
-        kept.append(pending_first)
-    return kept[:max_signals]
+def _enforce_min_gap(*args, **kwargs) -> list[dict]:  # noqa: ARG001
+    """废弃：旧的贪心配对，改用 _pair_and_limit + _select_non_overlapping DP。"""
+    raise NotImplementedError("Use _pair_and_limit instead")
 
 
-def _enforce_min_gap_bidir(
-    ordered: list[dict], resolve_gap, max_signals: int, pair_id_start: int = 1,
-) -> list[dict]:
-    """震荡：接受任意起手，但仍要求配对盈利（sell 价 - buy 价 ≥ gap）."""
-    kept: list[dict] = []
-    pending: dict | None = None
-    next_pair = pair_id_start
-    for s in ordered:
-        if len(kept) >= max_signals:
-            break
-        if pending is None:
-            pending = s
-            continue
-        if s["type"] != pending["type"]:
-            buy_sig = pending if pending["type"] == "buy" else s
-            sell_sig = s if pending["type"] == "buy" else pending
-            gap = resolve_gap(pending["price"])
-            if _profit(buy_sig, sell_sig) >= gap:
-                pending["pair_id"] = next_pair
-                s["pair_id"] = next_pair
-                next_pair += 1
-                kept.append(pending)
-                kept.append(s)
-                pending = None
-            # else 方向不对或差价不够，忽略当根，继续等
-        else:
-            pending = _better_first(pending, s)
-    if pending is not None and len(kept) < max_signals:
-        kept.append(pending)
-    return kept[:max_signals]
+def _enforce_min_gap_bidir(*args, **kwargs) -> list[dict]:  # noqa: ARG001
+    """废弃：旧的贪心配对，改用 _pair_and_limit + _select_non_overlapping DP。"""
+    raise NotImplementedError("Use _pair_and_limit instead")
 
 
 def _assign_seq(signals: list[dict]) -> list[dict]:

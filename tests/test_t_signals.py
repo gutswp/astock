@@ -231,13 +231,13 @@ def test_detect_strong_label_drops_early_buy():
     assert paired == [], f"强势日无先行 sell 时 buy 应丢弃，实际 {paired}"
 
 
-def test_detect_strong_keeps_unpaired_sell():
-    """强势日只有 sell 无 buy → sell 独立保留（未回买也是有效卖出提示）."""
+def test_detect_strong_only_pairs_no_singles():
+    """严格闭合：只有孤立 sell 无 buy → 无法配对做T → 空."""
     raw = [
         {"index": 15, "time": "09:45", "price": 10.30, "type": "sell", "reason": "跌破均价线"},
     ]
     paired = _pair_and_limit(raw, "强势", min_gap=0.2, max_pairs=3)
-    assert paired == raw, f"强势日孤立 sell 应保留，实际 {paired}"
+    assert paired == [], f"孤立 sell 应无法配对做T，实际 {paired}"
 
 
 def test_detect_weak_label_pairs_buy_first():
@@ -285,24 +285,23 @@ def test_detect_max_three_pairs():
 
 
 def test_detect_rejects_losing_pair_weak():
-    """弱势正T：买 10.30 → 卖 10.10 是"高买低卖"，赔钱，应丢弃."""
+    """弱势正T：买 10.30 → 卖 10.10 是"高买低卖"赔钱，整对丢弃（严格闭合，无孤立信号）."""
     raw = [
         {"index": 15, "time": "09:45", "price": 10.30, "type": "buy", "reason": "缩量止跌"},
         {"index": 25, "time": "09:55", "price": 10.10, "type": "sell", "reason": "跌破均价线"},
     ]
     paired = _pair_and_limit(raw, "弱势", min_gap=0.02, max_pairs=3)
-    # buy 保留为未配对，赔钱 sell 被丢
-    assert [s["type"] for s in paired] == ["buy"], f"高买低卖应丢弃，实际 {paired}"
+    assert paired == [], f"赔钱对应整对丢弃，实际 {paired}"
 
 
 def test_detect_rejects_losing_pair_strong():
-    """强势倒T：卖 10.10 → 买 10.30 是"卖低买高"，赔钱，应丢弃."""
+    """强势倒T：卖 10.10 → 买 10.30 是"卖低买高"赔钱，整对丢弃（严格闭合，无孤立信号）."""
     raw = [
         {"index": 15, "time": "09:45", "price": 10.10, "type": "sell", "reason": "冲高不创新高"},
         {"index": 25, "time": "09:55", "price": 10.30, "type": "buy", "reason": "缩量止跌"},
     ]
     paired = _pair_and_limit(raw, "强势", min_gap=0.02, max_pairs=3)
-    assert [s["type"] for s in paired] == ["sell"], f"卖低买高应丢弃，实际 {paired}"
+    assert paired == [], f"赔钱对应整对丢弃，实际 {paired}"
 
 
 def test_detect_rejects_losing_pair_shock():
@@ -333,7 +332,7 @@ def test_detect_keeps_best_pending_buy():
 
 
 def test_detect_keeps_best_pending_sell():
-    """强势卖pending：连续 3 个 sell 候选，保留价格最高那个（更好的倒T卖出价）."""
+    """强势卖pending：连续 3 个 sell 候选，DP 应选价格最高那个（更好的倒T卖出价）."""
     raw = [
         {"index": 15, "time": "09:45", "price": 10.20, "type": "sell", "reason": "冲高不创新高"},
         {"index": 20, "time": "09:50", "price": 10.35, "type": "sell", "reason": "放量滞涨"},
@@ -345,6 +344,41 @@ def test_detect_keeps_best_pending_sell():
     assert len(paired) == 2
     assert paired[0]["type"] == "sell" and paired[0]["price"] == 10.35
     assert paired[1]["type"] == "buy" and paired[1]["price"] == 10.10
+
+
+def test_detect_pairs_do_not_overlap():
+    """严格闭合：给一个包含大 pair 的候选集，DP 应选出不重叠的对，不允许 pair_A
+    未平仓时开 pair_B（即使总利润看起来更多）."""
+    # 弱势：只允许 buy → sell
+    raw = [
+        {"index": 20, "time": "10:00", "price": 10.00, "type": "buy", "reason": "不再创新低"},
+        {"index": 50, "time": "10:30", "price": 10.10, "type": "buy", "reason": "不再创新低"},
+        {"index": 80, "time": "11:00", "price": 10.35, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 110, "time": "11:30", "price": 10.40, "type": "buy", "reason": "不再创新低"},
+        {"index": 125, "time": "11:45", "price": 10.50, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 140, "time": "12:00", "price": 11.00, "type": "sell", "reason": "急拉尖顶"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.05, max_pairs=3)
+    # DP 应选：
+    #   A: [(20,140)] 一大对 profit 1.00
+    #   B: [(20,80), (110,125)] 两对 profit 0.35 + 0.10 = 0.45
+    # A 更好 → 只 1 对，覆盖全区间
+    assert len(paired) == 2, f"利润最优是一大对，实际 {len(paired)//2} 对"
+    assert paired[0]["type"] == "buy" and paired[0]["price"] == 10.00
+    assert paired[1]["type"] == "sell" and paired[1]["price"] == 11.00
+
+
+def test_detect_pairs_split_when_more_profitable():
+    """当拆分成多对总利润更高时，DP 选拆分方案而非单大对."""
+    raw = [
+        {"index": 20, "time": "10:00", "price": 10.00, "type": "buy", "reason": "缩量止跌"},
+        {"index": 30, "time": "10:10", "price": 10.30, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 40, "time": "10:20", "price": 10.10, "type": "buy", "reason": "不再创新低"},
+        {"index": 50, "time": "10:30", "price": 10.30, "type": "sell", "reason": "冲高不创新高"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.05, max_pairs=3)
+    # 两对：0.30 + 0.20 = 0.50 > 单大对 0.30 → 拆
+    assert len(paired) == 4, f"应产出 2 对（拆分方案），实际 {len(paired)//2} 对"
 
 
 def test_detect_tail_suppresses_buys():
