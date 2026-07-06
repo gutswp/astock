@@ -320,3 +320,21 @@ def get_indices() -> pd.DataFrame:
     if records:
         cache.put(key, records)
     return pd.DataFrame(records)
+
+
+def get_intraday_cached(code: str, ttl: int = 30) -> tuple[list[dict], float]:
+    """带 30s 缓存的分时数据（trends2）。
+
+    daemon 每 30s 扫全部持仓时避免重复打 push2delay；SSE 端点首次连接
+    时也复用同一缓存。
+    """
+    key = f"intraday:{code}"
+    hit = cache.get(key, ttl)
+    if hit is not None:
+        return hit["bars"], hit["preclose"]
+
+    from astock.screen.t_trading import get_intraday
+    bars, preclose = get_intraday(code)
+    if bars:
+        cache.put(key, {"bars": bars, "preclose": preclose})
+    return bars, preclose

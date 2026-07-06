@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from astock.ai.client import load_env
 from astock.config import load_config
 from astock.screen import daemon as alert_daemon
+from astock.screen import t_signals_daemon
 
 load_env()  # 让 NO_PROXY / http_proxy 等在导入其它模块前生效
 from astock.web.routes import (
@@ -34,9 +35,13 @@ async def _lifespan(app: FastAPI):
     restore_jobs()
     started = alert_daemon.start()
     app.state.alert_daemon = started
+    signals_started = t_signals_daemon.start(app.state.config)
+    app.state.signals_daemon = signals_started
     yield
     if started:
         alert_daemon.stop()
+    if signals_started:
+        t_signals_daemon.stop()
 
 
 app = FastAPI(title="AStock", docs_url=None, redoc_url=None, lifespan=_lifespan)

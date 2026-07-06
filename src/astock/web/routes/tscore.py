@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
+import asyncio
+import json
 
 from astock.config import load_config
+from astock.screen import t_signals_daemon
 from astock.screen.t_trading import build_tscore_results, build_training_case
 from astock.web.deps import render
 
@@ -66,3 +70,66 @@ async def tscore_training_page(
         error=error,
         labels=["强势", "偏强", "震荡", "偏弱", "弱势"],
     )
+
+
+@router.get("/tscore/{code}")
+async def tscore_detail_page(request: Request, code: str):
+    code = code.strip().zfill(6)
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(status_code=404, detail="非法股票代码")
+
+    request.app.state.config = load_config()
+    results = await run_in_threadpool(
+        build_tscore_results,
+        request.app.state.config,
+        [code],
+    )
+    result = results[0] if results else None
+    return render(
+        request,
+        "tscore_detail.html",
+        active="tscore",
+        title=f"{code} · 做T信号",
+        code=code,
+        result=result,
+    )
+
+
+@router.get("/tscore/stream/{code}")
+async def tscore_stream(request: Request, code: str):
+    """SSE 端点：每 30s 或有变更时推送 signals 快照。"""
+    code = code.strip().zfill(6)
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(status_code=404, detail="非法股票代码")
+
+    async def event_gen():
+        last_signature: str = ""
+        first = True
+        # 首连接：如果快照不存在，即时算一次
+        snap = t_signals_daemon.get_snapshot(code)
+        if snap is None:
+            snap = await run_in_threadpool(t_signals_daemon.compute_now, code)
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            snap = t_signals_daemon.get_snapshot(code)
+            if snap is None:
+                if first:
+                    snap = await run_in_threadpool(t_signals_daemon.compute_now, code)
+                    first = False
+
+            if snap:
+                sig = f"{len(snap['signals'])}-{snap['updated_at']}"
+                if sig != last_signature or first:
+                    last_signature = sig
+                    yield {"event": "signals", "data": json.dumps(snap, ensure_ascii=False)}
+                    first = False
+                else:
+                    yield {"event": "ping", "data": snap.get("updated_at", "")}
+            else:
+                yield {"event": "ping", "data": ""}
+            await asyncio.sleep(30)
+
+    return EventSourceResponse(event_gen())
