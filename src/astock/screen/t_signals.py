@@ -18,13 +18,20 @@ _GEM_LIMIT_PCT = 19.8  # 创业板/科创板 20%
 
 _LABEL_ORDER = {"强势": 2, "偏强": 1, "震荡": 0, "偏弱": -1, "弱势": -2}
 _REASON_PRIORITY = {
+    # 手册外扩展：日内极值突破 —— 权重最高，抓"大波段"
+    "急拉尖顶": 5,
+    "急跌捶底": 5,
+    # 手册内 3 类卖点
     "跌破均价线": 3,
     "冲高不创新高": 2,
     "放量滞涨": 1,
+    # 手册内 3 类买点
     "缩量止跌": 3,
     "回踩均价线企稳": 2,
     "不再创新低": 1,
 }
+
+_HIGH_PRIORITY_REASONS = {"急拉尖顶", "急跌捶底"}
 
 
 def _hhmm(bar: dict) -> str:
@@ -191,14 +198,72 @@ def is_sell_volume_stall(bars: list[dict], i: int) -> bool:
     return True
 
 
+def is_sell_spike_top(bars: list[dict], i: int) -> bool:
+    """急拉尖顶（手册外扩展）：突破日内高点 + 巨量 + 下一根开始回落。
+
+    抓 000063 今日 13:49-14:00 那种从 35.7 急拉到 37.15 的巨阳尖顶。
+    这类"大波段"手册 3 类卖点覆盖不到（不创新高不满足、大实体不是滞涨）。
+    """
+    if i + 2 >= len(bars) or not _lookback_ok(bars, i, 10):
+        return False
+    c = bars[i]
+
+    # 突破日内最高（含当根）
+    prior_high = max(b["high"] for b in bars[:i])
+    if c["high"] <= prior_high:
+        return False
+
+    # 巨量：≥ 前 5 根均量 × 2.5
+    prior_vol = mean(b["volume"] for b in bars[i - 5 : i])
+    if prior_vol <= 0 or c["volume"] < prior_vol * 2.5:
+        return False
+
+    # 后续 1 根开始回落（确认拒绝），2 根有一根低于当根 close 即算
+    later = bars[i + 1 : i + 3]
+    if not any(b["close"] < c["close"] for b in later):
+        return False
+
+    return True
+
+
+def is_buy_capitulate_low(bars: list[dict], i: int) -> bool:
+    """急跌捶底（手册外扩展）：跌破日内低点 + 大量恐慌 + 后续 1 根反弹。
+
+    对称于 is_sell_spike_top，抓日内急杀触底反弹的经典买点。
+    """
+    if i + 2 >= len(bars) or not _lookback_ok(bars, i, 10):
+        return False
+    c = bars[i]
+
+    prior_low = min(b["low"] for b in bars[:i])
+    if c["low"] >= prior_low:
+        return False
+
+    prior_vol = mean(b["volume"] for b in bars[i - 5 : i])
+    if prior_vol <= 0 or c["volume"] < prior_vol * 1.8:
+        return False
+
+    later = bars[i + 1 : i + 3]
+    if not any(b["close"] > c["close"] for b in later):
+        return False
+
+    return True
+
+
 # ---------- 主入口 ----------
 
 _BUY_DETECTORS = [
+    # 手册外优先：日内极值
+    ("急跌捶底", is_buy_capitulate_low),
+    # 手册内
     ("缩量止跌", is_buy_shrink_bottom),
     ("不再创新低", is_buy_higher_low),
     ("回踩均价线企稳", is_buy_vwap_bounce),
 ]
 _SELL_DETECTORS = [
+    # 手册外优先：日内极值
+    ("急拉尖顶", is_sell_spike_top),
+    # 手册内
     ("跌破均价线", is_sell_break_vwap),
     ("冲高不创新高", is_sell_lower_high),
     ("放量滞涨", is_sell_volume_stall),
@@ -275,16 +340,39 @@ def detect_signals(
     # 同类去噪：相邻 <5 根，保留优先级更高的（避免消化盘上买点连续触发）
     deduped = _dedup_same_type(raw, gap=5)
 
-    # 配对 + min_gap + 3 对上限（label 决定配对顺序）
-    paired = _pair_and_limit(
-        deduped, label,
-        min_gap_pct=min_gap_pct,
-        min_gap_abs=min_gap_abs,
-        min_gap_override=min_gap,
-        max_pairs=3,
+    # 两遍配对：优先保留手册外的极值信号（急拉尖顶/急跌捶底），再用手册 6 类补齐
+    high_pri = [s for s in deduped if s["reason"] in _HIGH_PRIORITY_REASONS]
+    regular = [s for s in deduped if s["reason"] not in _HIGH_PRIORITY_REASONS]
+
+    hp_paired = _pair_and_limit(
+        high_pri, label,
+        min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs,
+        min_gap_override=min_gap, max_pairs=3, pair_id_start=1,
     )
 
-    # 编号
+    used_slots = len(hp_paired)
+    hp_next_pair = max((s.get("pair_id", 0) for s in hp_paired), default=0) + 1
+    remaining = max(0, 6 - used_slots)
+    if remaining > 0 and regular:
+        # 剔除与极值信号时间相近（±10 根）的手册信号，避免同时段重复标注
+        hp_indices = [s["index"] for s in hp_paired]
+
+        def _far_enough(s: dict) -> bool:
+            return all(abs(s["index"] - hi) >= 10 for hi in hp_indices)
+
+        regular_far = [s for s in regular if _far_enough(s)]
+        reg_paired = _pair_and_limit(
+            regular_far, label,
+            min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs,
+            min_gap_override=min_gap,
+            max_pairs=remaining // 2 if remaining >= 2 else 1,
+            pair_id_start=hp_next_pair,
+        )
+        paired = hp_paired + reg_paired
+    else:
+        paired = hp_paired
+
+    # 按 pair 编号（同一 pair 的红/绿共享同一数字）
     return _assign_seq(paired)
 
 
@@ -320,13 +408,14 @@ def _pair_and_limit(
     min_gap_abs: float = 0.02,
     min_gap_override: float | None = None,
     max_pairs: int = 3,
+    pair_id_start: int = 1,
     # 兼容 tests 里以关键字 min_gap= 传入
     min_gap: float | None = None,
 ) -> list[dict]:
     """按 label 偏好配对：差价 < 有效 min_gap 的对被丢，未配对的单边信号保留。
 
     有效 min_gap: 优先 min_gap_override / min_gap；否则 max(min_gap_abs, price * min_gap_pct)。
-    最多 max_pairs * 2 = 6 个信号。
+    最多 max_pairs * 2 = 6 个信号。配对成功的两根共享 pair_id（从 pair_id_start 开始）。
     """
     if not signals:
         return []
@@ -342,10 +431,10 @@ def _pair_and_limit(
     max_signals = max_pairs * 2
 
     if label in {"强势", "偏强"}:
-        return _enforce_min_gap(ordered, "sell", "buy", _resolve_gap, max_signals)
+        return _enforce_min_gap(ordered, "sell", "buy", _resolve_gap, max_signals, pair_id_start)
     if label in {"弱势", "偏弱"}:
-        return _enforce_min_gap(ordered, "buy", "sell", _resolve_gap, max_signals)
-    return _enforce_min_gap_bidir(ordered, _resolve_gap, max_signals)
+        return _enforce_min_gap(ordered, "buy", "sell", _resolve_gap, max_signals, pair_id_start)
+    return _enforce_min_gap_bidir(ordered, _resolve_gap, max_signals, pair_id_start)
 
 
 def _profit(buy_sig: dict, sell_sig: dict) -> float:
@@ -369,14 +458,16 @@ def _enforce_min_gap(
     second_type: str,
     resolve_gap,
     max_signals: int,
+    pair_id_start: int = 1,
 ) -> list[dict]:
     """先 first_type 后 second_type 尝试配对。
 
     关键约束：只接受盈利对（sell 价 - buy 价 ≥ gap）。方向反了（高买低卖 /
-    卖低买高）的对直接跳过，不叫做T。
+    卖低买高）的对直接跳过，不叫做T。配对成功的两根都打上共同的 pair_id。
     """
     kept: list[dict] = []
     pending_first: dict | None = None
+    next_pair = pair_id_start
     for s in ordered:
         if len(kept) >= max_signals:
             break
@@ -389,6 +480,9 @@ def _enforce_min_gap(
             sell_sig = s if first_type == "buy" else pending_first
             gap = resolve_gap(pending_first["price"])
             if _profit(buy_sig, sell_sig) >= gap:
+                pending_first["pair_id"] = next_pair
+                s["pair_id"] = next_pair
+                next_pair += 1
                 kept.append(pending_first)
                 kept.append(s)
                 pending_first = None
@@ -399,11 +493,12 @@ def _enforce_min_gap(
 
 
 def _enforce_min_gap_bidir(
-    ordered: list[dict], resolve_gap, max_signals: int
+    ordered: list[dict], resolve_gap, max_signals: int, pair_id_start: int = 1,
 ) -> list[dict]:
     """震荡：接受任意起手，但仍要求配对盈利（sell 价 - buy 价 ≥ gap）."""
     kept: list[dict] = []
     pending: dict | None = None
+    next_pair = pair_id_start
     for s in ordered:
         if len(kept) >= max_signals:
             break
@@ -415,6 +510,9 @@ def _enforce_min_gap_bidir(
             sell_sig = s if pending["type"] == "buy" else pending
             gap = resolve_gap(pending["price"])
             if _profit(buy_sig, sell_sig) >= gap:
+                pending["pair_id"] = next_pair
+                s["pair_id"] = next_pair
+                next_pair += 1
                 kept.append(pending)
                 kept.append(s)
                 pending = None
@@ -427,19 +525,42 @@ def _enforce_min_gap_bidir(
 
 
 def _assign_seq(signals: list[dict]) -> list[dict]:
-    buy_n = 0
-    sell_n = 0
+    """按 pair 编号：同一 pair 的红/绿共享同一数字（例如 pair 1 = 红1+绿1）。
+    未配对信号在所有 pair 之后单独编号。"""
+    ordered = sorted(signals, key=lambda x: x["index"])
+
+    # 收集所有 pair_id，按最早出现时间排序 → 重编号 1..N
+    pair_min_idx: dict[int, int] = {}
+    for s in ordered:
+        pid = s.get("pair_id")
+        if pid is None:
+            continue
+        if pid not in pair_min_idx or s["index"] < pair_min_idx[pid]:
+            pair_min_idx[pid] = s["index"]
+    sorted_pids = sorted(pair_min_idx, key=lambda p: pair_min_idx[p])
+    remap = {old: new for new, old in enumerate(sorted_pids, 1)}
+
+    unpaired_buy = 0
+    unpaired_sell = 0
+    n_pairs = len(sorted_pids)
+
     out: list[dict] = []
-    for s in sorted(signals, key=lambda x: x["index"]):
+    for s in ordered:
         s = dict(s)
-        if s["type"] == "buy":
-            buy_n += 1
-            s["seq"] = buy_n
-            s["marker"] = f"红{buy_n}"
+        pid = s.get("pair_id")
+        if pid is not None:
+            seq = remap[pid]
         else:
-            sell_n += 1
-            s["seq"] = sell_n
-            s["marker"] = f"绿{sell_n}"
+            if s["type"] == "buy":
+                unpaired_buy += 1
+                seq = n_pairs + unpaired_buy
+            else:
+                unpaired_sell += 1
+                seq = n_pairs + unpaired_sell
+        s["seq"] = seq
+        s["marker"] = f"红{seq}" if s["type"] == "buy" else f"绿{seq}"
         s["note"] = f"{s['marker']} · {s['reason']} @ {s['price']:.2f}"
+        # 清掉内部字段
+        s.pop("pair_id", None)
         out.append(s)
     return out
