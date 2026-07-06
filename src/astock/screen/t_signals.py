@@ -131,7 +131,7 @@ def is_buy_vwap_bounce(bars: list[dict], i: int) -> bool:
 
 
 def is_sell_break_vwap(bars: list[dict], i: int) -> bool:
-    """跌破均价线：上一根还在均价线上，本根收在下 + 放量确认."""
+    """跌破均价线：上一根还在均价线上，本根收在下 + 有量能（不要求 1.2x 放量）。"""
     if not _lookback_ok(bars, i, 5):
         return False
     prev = bars[i - 1]
@@ -142,45 +142,46 @@ def is_sell_break_vwap(bars: list[dict], i: int) -> bool:
         return False
 
     prior_vol = mean(b["volume"] for b in bars[i - 5 : i])
-    if prior_vol <= 0 or c["volume"] < prior_vol * 1.2:
+    if prior_vol > 0 and c["volume"] < prior_vol * 0.5:
+        # 量能太少（缩量假破位），拒绝
         return False
 
     return True
 
 
 def is_sell_lower_high(bars: list[dict], i: int) -> bool:
-    """冲高不创新高 / 第二波冲高失败：本根为 pivot 且高点低于前段高，且中间有回撤."""
-    if i + 3 >= len(bars) or not _lookback_ok(bars, i, 8):
+    """冲高不创新高 / 第二波冲高失败：本根为 ±2 pivot 且高点低于前段高，且中间有回撤."""
+    if i + 2 >= len(bars) or not _lookback_ok(bars, i, 6):
         return False
-    window_hi = bars[i - 3 : i + 4]
+    window_hi = bars[i - 2 : i + 3]
     if bars[i]["high"] != max(b["high"] for b in window_hi):
         return False
 
-    ref = bars[i - 8 : i - 3]
+    ref = bars[i - 6 : i - 2]
     ref_high = max(b["high"] for b in ref)
     if bars[i]["high"] >= ref_high:
         return False
 
-    between = bars[i - 3 : i]
+    between = bars[i - 2 : i]
     between_low = min(b["low"] for b in between)
-    if ref_high <= 0 or (ref_high - between_low) / ref_high * 100 < 0.3:
+    if ref_high <= 0 or (ref_high - between_low) / ref_high * 100 < 0.15:
         return False
 
     return True
 
 
 def is_sell_volume_stall(bars: list[dict], i: int) -> bool:
-    """放量滞涨：放量 + 小实体 + 在近期高位."""
+    """放量滞涨：量能相对放大 + 小实体 + 在近期高位。"""
     if not _lookback_ok(bars, i, 8):
         return False
     c = bars[i]
     prior_vol = mean(b["volume"] for b in bars[i - 5 : i])
-    if prior_vol <= 0 or c["volume"] < prior_vol * 1.5:
+    if prior_vol <= 0 or c["volume"] < prior_vol * 1.2:
         return False
 
     rng = max(c["high"] - c["low"], 1e-6)
     body = abs(c["close"] - c["open"])
-    if body / rng >= 0.3:
+    if body / rng >= 0.4:
         return False
 
     recent_high = max(b["close"] for b in bars[i - 8 : i])
@@ -217,9 +218,16 @@ def detect_signals(
     preclose: float,
     label: str,
     code: str = "",
-    min_gap: float = 0.2,
+    min_gap: float | None = None,
+    min_gap_pct: float = 0.003,
+    min_gap_abs: float = 0.02,
 ) -> list[dict]:
     """扫描分时序列，产出编号后的买卖点。
+
+    差价约束：每对 |Δprice| ≥ max(min_gap_abs, first_price * min_gap_pct)
+    - 默认 0.3% + 0.02元 floor，兼顾贵/便宜票
+    - 手册的"0.2元不做"对应中兴通讯 @36元 → 0.55%，仍属合理档位
+    - 若传统 `min_gap` 被显式指定，则整段用它（向后兼容旧调用/测试）
 
     Returns list of dicts: {index, time, price, type, reason, seq, note}.
     """
@@ -263,32 +271,26 @@ def detect_signals(
                 }
             )
 
-    # 按 label 过滤
-    filtered = _filter_by_label(raw, label)
+    # 主：不再按 label 丢弃对手方 —— label 只决定"先卖后买"或"先买后卖"的配对方向
+    # 同类去噪：相邻 <5 根，保留优先级更高的（避免消化盘上买点连续触发）
+    deduped = _dedup_same_type(raw, gap=5)
 
-    # 同类去噪：相邻 <3 根，保留优先级更高的
-    deduped = _dedup_same_type(filtered, gap=3)
-
-    # 配对 + min_gap + 3 对上限
-    paired = _pair_and_limit(deduped, label, min_gap=min_gap, max_pairs=3)
+    # 配对 + min_gap + 3 对上限（label 决定配对顺序）
+    paired = _pair_and_limit(
+        deduped, label,
+        min_gap_pct=min_gap_pct,
+        min_gap_abs=min_gap_abs,
+        min_gap_override=min_gap,
+        max_pairs=3,
+    )
 
     # 编号
     return _assign_seq(paired)
 
 
 def _filter_by_label(signals: list[dict], label: str) -> list[dict]:
-    if label == "强势":
-        return [s for s in signals if s["type"] == "sell"]
-    if label == "弱势":
-        return [s for s in signals if s["type"] == "buy"]
-    if label == "偏强":
-        return [
-            s for s in signals
-            if s["type"] == "sell" or s["reason"] == "回踩均价线企稳"
-        ]
-    if label == "偏弱":
-        return [s for s in signals if s["type"] == "buy"]
-    # 震荡
+    """废弃：保留仅供向后引用。做T手册里"强势只倒T"指的是配对顺序（先卖后买），
+    不是"只标卖点"。信号本身不按 label 丢弃对手方。"""
     return list(signals)
 
 
@@ -314,58 +316,73 @@ def _dedup_same_type(signals: list[dict], gap: int) -> list[dict]:
 def _pair_and_limit(
     signals: list[dict],
     label: str,
-    min_gap: float,
-    max_pairs: int,
+    min_gap_pct: float = 0.003,
+    min_gap_abs: float = 0.02,
+    min_gap_override: float | None = None,
+    max_pairs: int = 3,
+    # 兼容 tests 里以关键字 min_gap= 传入
+    min_gap: float | None = None,
 ) -> list[dict]:
-    """按 label 偏好配对：差价 < min_gap 的对被丢，未配对的单边信号保留。
+    """按 label 偏好配对：差价 < 有效 min_gap 的对被丢，未配对的单边信号保留。
 
+    有效 min_gap: 优先 min_gap_override / min_gap；否则 max(min_gap_abs, price * min_gap_pct)。
     最多 max_pairs * 2 = 6 个信号。
     """
     if not signals:
         return []
 
+    override = min_gap_override if min_gap_override is not None else min_gap
+
+    def _resolve_gap(first_price: float) -> float:
+        if override is not None:
+            return override
+        return max(min_gap_abs, first_price * min_gap_pct)
+
     ordered = sorted(signals, key=lambda s: s["index"])
     max_signals = max_pairs * 2
 
     if label in {"强势", "偏强"}:
-        return _enforce_min_gap(ordered, "sell", "buy", min_gap, max_signals)
+        return _enforce_min_gap(ordered, "sell", "buy", _resolve_gap, max_signals)
     if label in {"弱势", "偏弱"}:
-        return _enforce_min_gap(ordered, "buy", "sell", min_gap, max_signals)
-    return _enforce_min_gap_bidir(ordered, min_gap, max_signals)
+        return _enforce_min_gap(ordered, "buy", "sell", _resolve_gap, max_signals)
+    return _enforce_min_gap_bidir(ordered, _resolve_gap, max_signals)
 
 
 def _enforce_min_gap(
     ordered: list[dict],
     first_type: str,
     second_type: str,
-    min_gap: float,
+    resolve_gap,
     max_signals: int,
 ) -> list[dict]:
-    """先 first_type 后 second_type 尝试配对；未配的单边也保留."""
+    """先 first_type 后 second_type 尝试配对；早于 first 的 second 违反 label 意图，丢弃。
+
+    做T 逻辑上，连续买/连续卖没意义 —— 未完成配对时新 first 覆盖旧 pending
+    （代表 trader 应该用最新价加仓/挂新单）。只有配对完成后才开启下一轮。
+    """
     kept: list[dict] = []
     pending_first: dict | None = None
     for s in ordered:
         if len(kept) >= max_signals:
             break
         if s["type"] == first_type:
-            if pending_first is not None:
-                kept.append(pending_first)
-            pending_first = s
+            pending_first = s  # 用最新的 first 作 pending，不累积历史
         elif s["type"] == second_type:
             if pending_first is None:
-                kept.append(s)  # 未配的 second 独立保留
-            elif abs(s["price"] - pending_first["price"]) >= min_gap:
+                continue  # 违反 label 顺序，跳过
+            gap = resolve_gap(pending_first["price"])
+            if abs(s["price"] - pending_first["price"]) >= gap:
                 kept.append(pending_first)
                 kept.append(s)
                 pending_first = None
-            # else 差价不够，drop second，first 继续等
+            # else 差价不够
     if pending_first is not None and len(kept) < max_signals:
         kept.append(pending_first)
     return kept[:max_signals]
 
 
 def _enforce_min_gap_bidir(
-    ordered: list[dict], min_gap: float, max_signals: int
+    ordered: list[dict], resolve_gap, max_signals: int
 ) -> list[dict]:
     """震荡：接受任意起手，贪心配对；未配的也保留."""
     kept: list[dict] = []
@@ -377,13 +394,13 @@ def _enforce_min_gap_bidir(
             pending = s
             continue
         if s["type"] != pending["type"]:
-            if abs(s["price"] - pending["price"]) >= min_gap:
+            gap = resolve_gap(pending["price"])
+            if abs(s["price"] - pending["price"]) >= gap:
                 kept.append(pending)
                 kept.append(s)
                 pending = None
-            # else 差价不够，drop 当根，等下一根异类
+            # else 差价不够
         else:
-            # 同向 → 冲掉旧的 pending 直接保留，pending 更新为当根
             kept.append(pending)
             pending = s
     if pending is not None and len(kept) < max_signals:

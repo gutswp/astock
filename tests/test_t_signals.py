@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from astock.screen.t_signals import (
+    _pair_and_limit,
     detect_signals,
     is_buy_higher_low,
     is_buy_shrink_bottom,
@@ -136,11 +137,12 @@ def test_sell_break_vwap_triggers():
     assert is_sell_break_vwap(bars, len(bars) - 1)
 
 
-def test_sell_break_vwap_no_volume():
+def test_sell_break_vwap_shrunk_volume_rejected():
+    """严重缩量的假跌破（可能只是波动）不应触发."""
     bars = _flat_am_baseline(15, close=10.05, vol=1000)
     for b in bars:
         b["vwap"] = 10.0
-    bars.append(_bar("09:45", 9.95, low=9.93, vol=800, vwap=10.0))  # 量没放
+    bars.append(_bar("09:45", 9.95, low=9.93, vol=300, vwap=10.0))  # vol 300 < 0.5*1000
     assert not is_sell_break_vwap(bars, len(bars) - 1)
 
 
@@ -209,32 +211,77 @@ def test_detect_returns_empty_on_missing_label():
     assert detect_signals(bars, 10.0, "数据不足") == []
 
 
-def test_detect_strong_label_keeps_only_sells():
-    bars = _flat_am_baseline(15, close=10.30, vol=1000)
-    # 放量滞涨触发 sell
-    bars.append(_bar("09:45", 10.30, open_=10.29, high=10.35, low=10.28, vol=2000))
-    # 后面几根平稳
-    for k in range(1, 6):
-        mm = 45 + k
-        bars.append(_bar(f"09:{mm:02d}", 10.28, vol=1000))
-    signals = detect_signals(bars, 10.20, "强势")
-    assert all(s["type"] == "sell" for s in signals)
-    assert len(signals) >= 1
+def test_detect_strong_label_pairs_sell_first():
+    """强势日：出现 sell 后再出现 buy → 应产出 sell → buy 一对（倒T）."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "sell", "reason": "放量滞涨"},
+        {"index": 25, "time": "09:55", "price": 10.05, "type": "buy", "reason": "缩量止跌"},
+    ]
+    paired = _pair_and_limit(raw, "强势", min_gap=0.2, max_pairs=3)
+    assert [s["type"] for s in paired] == ["sell", "buy"], f"倒T应先卖后买，实际 {paired}"
+    assert paired[0]["price"] > paired[1]["price"], "倒T 卖价应高于买价"
 
 
-def test_detect_weak_label_keeps_only_buys():
-    bars = _flat_am_baseline(15, close=10.20, vol=1000)
-    # 缩量止跌买点
-    bars.append(_bar("09:45", 10.15, low=10.13, vol=900))
-    bars.append(_bar("09:46", 10.10, low=10.08, vol=800))
-    bars.append(_bar("09:47", 10.05, low=10.03, vol=700))
-    bars.append(_bar("09:48", 10.07, low=10.06, vol=300))
-    for k in range(1, 6):
-        mm = 48 + k
-        bars.append(_bar(f"09:{mm:02d}", 10.08, vol=800))
-    signals = detect_signals(bars, 10.20, "弱势")
-    assert all(s["type"] == "buy" for s in signals)
-    assert len(signals) >= 1
+def test_detect_strong_label_drops_early_buy():
+    """强势日 buy 出现在任何 sell 之前 → 违反倒T顺序，应被丢弃."""
+    raw = [
+        {"index": 18, "time": "09:48", "price": 10.07, "type": "buy", "reason": "缩量止跌"},
+    ]
+    paired = _pair_and_limit(raw, "强势", min_gap=0.2, max_pairs=3)
+    assert paired == [], f"强势日无先行 sell 时 buy 应丢弃，实际 {paired}"
+
+
+def test_detect_strong_keeps_unpaired_sell():
+    """强势日只有 sell 无 buy → sell 独立保留（未回买也是有效卖出提示）."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "sell", "reason": "跌破均价线"},
+    ]
+    paired = _pair_and_limit(raw, "强势", min_gap=0.2, max_pairs=3)
+    assert paired == raw, f"强势日孤立 sell 应保留，实际 {paired}"
+
+
+def test_detect_weak_label_pairs_buy_first():
+    """弱势日：出现 buy 后再出现 sell → 应产出 buy → sell 一对（正T）."""
+    raw = [
+        {"index": 18, "time": "09:48", "price": 10.07, "type": "buy", "reason": "缩量止跌"},
+        {"index": 28, "time": "09:58", "price": 10.30, "type": "sell", "reason": "冲高不创新高"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.2, max_pairs=3)
+    assert [s["type"] for s in paired] == ["buy", "sell"], f"正T应先买后卖，实际 {paired}"
+    assert paired[1]["price"] > paired[0]["price"], "正T 卖价应高于买价"
+
+
+def test_detect_weak_label_drops_early_sell():
+    """弱势日 sell 出现在任何 buy 之前 → 违反正T顺序，应被丢弃."""
+    raw = [
+        {"index": 15, "time": "09:45", "price": 10.30, "type": "sell", "reason": "放量滞涨"},
+    ]
+    paired = _pair_and_limit(raw, "弱势", min_gap=0.2, max_pairs=3)
+    assert paired == [], f"弱势日无先行 buy 时 sell 应丢弃，实际 {paired}"
+
+
+def test_detect_shock_label_pairs_both_directions():
+    """震荡：双向都可以做T，接受任意起手."""
+    raw = [
+        {"index": 18, "time": "09:48", "price": 10.07, "type": "buy", "reason": "缩量止跌"},
+        {"index": 28, "time": "09:58", "price": 10.30, "type": "sell", "reason": "冲高不创新高"},
+        {"index": 38, "time": "10:08", "price": 10.05, "type": "buy", "reason": "回踩均价线企稳"},
+    ]
+    paired = _pair_and_limit(raw, "震荡", min_gap=0.2, max_pairs=3)
+    assert len(paired) >= 2, f"震荡日应至少一对 buy-sell，实际 {paired}"
+    assert any(s["type"] == "buy" for s in paired)
+    assert any(s["type"] == "sell" for s in paired)
+
+
+def test_detect_max_three_pairs():
+    """最多 3 组：给 4 对候选，应只保留 6 个信号."""
+    raw = []
+    for k in range(4):
+        idx = 15 + k * 10
+        raw.append({"index": idx, "time": f"09:{45+k*10 % 60:02d}", "price": 10.30, "type": "sell", "reason": "放量滞涨"})
+        raw.append({"index": idx + 5, "time": f"09:{50+k*10 % 60:02d}", "price": 10.05, "type": "buy", "reason": "缩量止跌"})
+    paired = _pair_and_limit(raw, "强势", min_gap=0.2, max_pairs=3)
+    assert len(paired) <= 6, f"最多 3 对 = 6 个信号，实际 {len(paired)}"
 
 
 def test_detect_tail_suppresses_buys():
