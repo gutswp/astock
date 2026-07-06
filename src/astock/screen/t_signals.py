@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 from statistics import mean
+from pathlib import Path
+import yaml
 
 _MIN_INDEX = 5  # 从 09:35 起扫全天。label 仍用 9:45 前 15 根算，但信号扫描不受限
 _TAIL_SUPPRESS_MINUTES = 5  # 14:55 后不出 buy
@@ -32,6 +34,33 @@ _REASON_PRIORITY = {
 }
 
 _HIGH_PRIORITY_REASONS = {"急拉尖顶", "急跌捶底"}
+
+_DEFAULT_MAX_PAIRS = {
+    "强势": 3,
+    "偏强": 3,
+    "震荡": 6,
+    "偏弱": 3,
+    "弱势": 3,
+}
+
+
+def _load_max_pairs_config() -> dict[str, int]:
+    """从 config/settings.yaml::signals_max_pairs 读取，缺失走默认."""
+    try:
+        # 避免循环导入：延迟 import
+        from astock import CONFIG_DIR
+        p = Path(CONFIG_DIR) / "settings.yaml"
+        if not p.exists():
+            return dict(_DEFAULT_MAX_PAIRS)
+        raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        cfg = raw.get("signals_max_pairs") or {}
+        return {**_DEFAULT_MAX_PAIRS, **{k: int(v) for k, v in cfg.items()}}
+    except Exception:
+        return dict(_DEFAULT_MAX_PAIRS)
+
+
+def _max_pairs_for(label: str) -> int:
+    return _load_max_pairs_config().get(label, 3)
 
 
 def _hhmm(bar: dict) -> str:
@@ -341,11 +370,13 @@ def detect_signals(
     deduped = _dedup_same_type(raw, gap=5)
 
     # 关键：做 T 严格闭合 —— 每组买卖必须完成后才能开下一组，不允许时间重叠。
-    # 用 DP 选 K=3 个不重叠、盈利、方向正确的对，总利润最大化。
+    # 用 DP 选 K 个不重叠、盈利、方向正确的对，总利润最大化。
+    # max_pairs 从 settings.yaml::signals_max_pairs 按 label 读取（默认趋势 3 / 震荡 6）
+    max_pairs_for_label = _max_pairs_for(label)
     paired = _pair_and_limit(
         deduped, label,
         min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs,
-        min_gap_override=min_gap, max_pairs=3,
+        min_gap_override=min_gap, max_pairs=max_pairs_for_label,
     )
 
     # 按时间序编号（红1=最早买、绿1=最早卖），配对信息作为 partner 字段附加

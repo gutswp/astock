@@ -43,6 +43,16 @@ signals_daemon:
   intraday_ttl_seconds: 3    # 分时数据缓存 TTL，短于 daemon 间隔即可
   sse_poll_seconds: 1        # SSE 端点检查快照签名的间隔
 
+# 做T信号配对上限（按 label 分层，覆盖手册 V1.0 "≤3 组"）
+# 手册数值适合趋势日（纪律优先，防手续费磨损）。震荡日本是 T 黄金日，放宽到 6 对
+# 回测数据：3 对时 84% 的日子撞天花板，5 对时仍 33% 撞
+signals_max_pairs:
+  强势: 3
+  偏强: 3
+  震荡: 6
+  偏弱: 3
+  弱势: 3
+
 # 持仓风险监控（跟 alert_daemon 同一循环，通过其 enabled 生效）
 position_monitor:
   enabled: false             # 默认关
