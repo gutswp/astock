@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 mb-4">
+  <div>
+    <a href="/tscore" class="text-xs text-gray-500 hover:text-white">← 返回汇总</a>
+    <h1 class="text-xl font-bold mt-1">
+      {% if result %}{{ result.name }} <span class="text-gray-500 font-mono text-base ml-1">{{ code }}</span>{% else %}{{ code }}{% endif %}
+    </h1>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+    <a href="/tscore/training?code={{ code }}" class="btn btn-ghost">去训练</a>
+  </div>
+</div>
+
+{% if not result or not result.details %}
+<div class="card p-8 text-center text-gray-500 text-sm">
+  暂无该股票的分时评分数据。
+</div>
+{% else %}
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+  <div class="xl:col-span-2 space-y-4">
+    <!-- 关键指标条 -->
+    <div class="card p-4 flex flex-wrap items-center gap-4">
+      <div>
+        <div class="kpi-label">当日判定</div>
+        {% set r = result %}
+        {% if r.label == '强势' %}<span class="badge" style="background:#7f1d1d;color:#fca5a5">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
+        {% elif r.label == '偏强' %}<span class="badge" style="background:#713f12;color:#fde68a">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
+        {% elif r.label == '震荡' %}<span class="badge" style="background:#1e3a5f;color:#93c5fd">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
+        {% elif r.label == '偏弱' %}<span class="badge" style="background:#14532d;color:#86efac">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
+        {% elif r.label == '弱势' %}<span class="badge" style="background:#052e16;color:#4ade80">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
+        {% else %}<span class="badge">{{ r.label }} {{ "%+d"|format(r.score) }}</span>{% endif %}
+      </div>
+      <div>
+        <div class="kpi-label">现价</div>
+        <div class="num text-lg" id="kpi-price">{{ "%.2f"|format(r.current) }}</div>
+      </div>
+      <div>
+        <div class="kpi-label">vs 昨收</div>
+        <div class="num text-lg {% if r.change_pct > 0 %}pos{% elif r.change_pct < 0 %}neg{% endif %}" id="kpi-change">{{ "%+.2f%%"|format(r.change_pct) }}</div>
+      </div>
+      <div>
+        <div class="kpi-label">昨收</div>
+        <div class="num text-lg">{{ "%.2f"|format(r.preclose) }}</div>
+      </div>
+      <div class="ml-auto text-right">
+        <div class="kpi-label">红/绿信号</div>
+        <div class="num text-lg">
+          <span class="pos" id="kpi-buys">{{ (r.signals|selectattr('type','equalto','buy')|list)|length }}</span>
+          ·
+          <span class="neg" id="kpi-sells">{{ (r.signals|selectattr('type','equalto','sell')|list)|length }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 主图 -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-semibold">全天分时 · 红=买点 · 绿=卖点</div>
+        <div class="text-xs text-gray-500" id="sse-status" hx-ext="sse" sse-connect="/tscore/stream/{{ code }}" sse-swap="ping">
+          <span id="sse-indicator">🟢 已订阅实时更新（30s）</span>
+        </div>
+      </div>
+      <div id="detail-chart" style="height:480px"
+           data-times='{{ r.chart_times|tojson }}'
+           data-closes='{{ r.chart_closes|tojson }}'
+           data-vwaps='{{ r.chart_vwaps|tojson }}'
+           data-signals='{{ r.signals|tojson }}'></div>
+    </div>
+
+    <!-- 信号明细 -->
+    <div class="card p-4">
+      <div class="text-sm font-semibold mb-3">信号明细</div>
+      {% if r.signals %}
+      <table class="data text-sm" id="signal-table">
+        <thead>
+          <tr>
+            <th class="text-center">编号</th>
+            <th>时间</th>
+            <th class="text-center">类型</th>
+            <th class="text-right">价格</th>
+            <th>依据</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in r.signals %}
+          <tr>
+            <td class="text-center font-bold {% if s.type == 'buy' %}pos{% else %}neg{% endif %}">{{ s.marker }}</td>
+            <td class="font-mono">{{ s.time }}</td>
+            <td class="text-center">{% if s.type == 'buy' %}<span class="pos">买</span>{% else %}<span class="neg">卖</span>{% endif %}</td>
+            <td class="text-right num">{{ "%.2f"|format(s.price) }}</td>
+            <td class="text-gray-300">{{ s.reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="text-sm text-gray-500 py-4">当前无满足纪律的买卖点。信号在 9:45 后开始检测，尾盘 14:55 后不出买点。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="space-y-4">
+    <!-- 打分明细 -->
+    <div class="card p-4">
+      <div class="font-semibold mb-3">开盘 15 分钟打分</div>
+      <table class="data text-sm">
+        <thead>
+          <tr><th>指标</th><th class="text-center">分数</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {% for indicator, pts, desc in r.details %}
+          <tr>
+            <td class="text-gray-400">{{ indicator }}</td>
+            <td class="text-center font-bold num {% if pts|int > 0 %}pos{% elif pts|int < 0 %}neg{% endif %}">{{ pts }}</td>
+            <td class="text-gray-300">{{ desc }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="mt-3 text-sm text-gray-400 border-t border-gray-800 pt-2">
+        {{ r.strategy }}
+      </div>
+    </div>
+
+    <!-- 规则速览 -->
+    <div class="card p-4 text-xs text-gray-400">
+      <div class="font-semibold text-white mb-2 text-sm">规则速览（V1.0）</div>
+      <ul class="list-disc ml-4 space-y-1">
+        <li><span class="pos font-semibold">买点</span>：缩量止跌 / 不再创新低 / 回踩均价线企稳</li>
+        <li><span class="neg font-semibold">卖点</span>：跌破均价线 / 冲高不创新高 / 放量滞涨</li>
+        <li>强势 → 只倒T（先卖后买）</li>
+        <li>弱势 → 只正T（先买后卖）</li>
+        <li>震荡 → 双向做T</li>
+        <li>每天 ≤3 组、每对差价 ≥0.2 元</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+{% if result and result.chart_times %}
+<script>
+(function () {
+  const el = document.getElementById('detail-chart');
+  if (!el) return;
+  let times = JSON.parse(el.dataset.times || '[]');
+  let closes = JSON.parse(el.dataset.closes || '[]');
+  let vwaps = JSON.parse(el.dataset.vwaps || '[]');
+  let signals = JSON.parse(el.dataset.signals || '[]');
+
+  const chart = echarts.init(el, 'dark');
+
+  function buildOption() {
+    const markData = signals.map(s => ({
+      name: s.marker,
+      coord: [s.time, s.price],
+      value: s.marker,
+      label: {show: true, formatter: s.marker, color: '#ffffff', fontSize: 12, fontWeight: 'bold'},
+      itemStyle: {
+        color: s.type === 'buy' ? '#ef4444' : '#22c55e',
+        borderColor: '#0b1220',
+        borderWidth: 2,
+      },
+      symbol: 'circle',
+      symbolSize: 32,
+    }));
+    return {
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {trigger: 'axis'},
+      legend: {top: 0, textStyle: {color: '#94a3b8'}, data: ['收盘', '均价']},
+      grid: {left: 48, right: 20, top: 32, bottom: 32},
+      xAxis: {
+        type: 'category',
+        data: times,
+        axisLine: {lineStyle: {color: '#374151'}},
+        axisLabel: {color: '#94a3b8'},
+      },
+      yAxis: {
+        scale: true,
+        axisLine: {show: false},
+        axisLabel: {color: '#94a3b8'},
+        splitLine: {lineStyle: {color: '#1f2937'}},
+      },
+      series: [
+        {
+          name: '收盘',
+          type: 'line',
+          data: closes,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: {width: 2, color: '#f87171'},
+          markPoint: markData.length ? {data: markData} : undefined,
+        },
+        {
+          name: '均价',
+          type: 'line',
+          data: vwaps,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: {width: 2, color: '#60a5fa'},
+        },
+      ],
+    };
+  }
+
+  chart.setOption(buildOption());
+  window.addEventListener('resize', () => chart.resize());
+
+  // SSE 更新（Phase D 挂上）
+  const sseStatus = document.getElementById('sse-indicator');
+  if (window.EventSource) {
+    const es = new EventSource('/tscore/stream/{{ code }}');
+    es.addEventListener('signals', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data);
+        signals = payload.signals || signals;
+        closes = payload.closes || closes;
+        vwaps = payload.vwaps || vwaps;
+        times = payload.times || times;
+        chart.setOption(buildOption(), {notMerge: true});
+        // 更新 KPI
+        if (payload.current !== undefined) {
+          const p = document.getElementById('kpi-price');
+          if (p) p.textContent = payload.current.toFixed(2);
+        }
+        if (payload.change_pct !== undefined) {
+          const c = document.getElementById('kpi-change');
+          if (c) {
+            c.textContent = (payload.change_pct >= 0 ? '+' : '') + payload.change_pct.toFixed(2) + '%';
+            c.className = 'num text-lg ' + (payload.change_pct > 0 ? 'pos' : payload.change_pct < 0 ? 'neg' : '');
+          }
+        }
+        const buysN = signals.filter(s => s.type === 'buy').length;
+        const sellsN = signals.filter(s => s.type === 'sell').length;
+        const b = document.getElementById('kpi-buys');
+        const s = document.getElementById('kpi-sells');
+        if (b) b.textContent = buysN;
+        if (s) s.textContent = sellsN;
+        if (sseStatus) sseStatus.textContent = '🟢 已更新 · ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        console.error('SSE payload parse error', e);
+      }
+    });
+    es.addEventListener('ping', () => {
+      if (sseStatus) sseStatus.textContent = '🟢 已订阅 · ' + new Date().toLocaleTimeString();
+    });
+    es.onerror = () => {
+      if (sseStatus) sseStatus.textContent = '🔴 SSE 断开';
+    };
+  } else if (sseStatus) {
+    sseStatus.textContent = '（浏览器不支持 SSE）';
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}
