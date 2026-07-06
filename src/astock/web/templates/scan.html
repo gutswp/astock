@@ -15,7 +15,9 @@
 
   <div id="scan-panel">
     {% if latest_job %}
-      {% include "partials/scan_status.html" %}
+      {% with job = latest_job %}
+        {% include "partials/scan_status.html" %}
+      {% endwith %}
     {% else %}
       <div class="card p-8 text-center text-gray-500 text-sm">
         点击「开始扫描」，会显示实时进度和最终结果。<br>
