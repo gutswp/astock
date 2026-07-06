@@ -37,6 +37,12 @@ alert_daemon:
   interval_seconds: 300      # 每 5 分钟扫一次关注池
   dedup_window_seconds: 3600 # 同一 (code,type,round(price,1)) 1 小时内只推一次
 
+# 做T信号后台守护（web 起时自动挂，交易时段自动激活；非交易时段静默）
+signals_daemon:
+  interval_seconds: 5        # 每 5s 重扫全部持仓的分时+信号（约 5-10s 到浏览器）
+  intraday_ttl_seconds: 3    # 分时数据缓存 TTL，短于 daemon 间隔即可
+  sse_poll_seconds: 1        # SSE 端点检查快照签名的间隔
+
 # 持仓风险监控（跟 alert_daemon 同一循环，通过其 enabled 生效）
 position_monitor:
   enabled: false             # 默认关

@@ -60,7 +60,7 @@
       <div class="flex items-center justify-between mb-2">
         <div class="text-sm font-semibold">全天分时 · 红=买点 · 绿=卖点</div>
         <div class="text-xs text-gray-500" id="sse-status" hx-ext="sse" sse-connect="/tscore/stream/{{ code }}" sse-swap="ping">
-          <span id="sse-indicator">🟢 已订阅实时更新（30s）</span>
+          <span id="sse-indicator">🟢 已订阅实时更新（{{ daemon_interval|default(5) }}s）</span>
         </div>
       </div>
       <div id="detail-chart" style="height:480px"

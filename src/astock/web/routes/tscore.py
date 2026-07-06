@@ -85,6 +85,7 @@ async def tscore_detail_page(request: Request, code: str):
         [code],
     )
     result = results[0] if results else None
+    dcfg = t_signals_daemon._load_daemon_config()
     return render(
         request,
         "tscore_detail.html",
@@ -92,19 +93,23 @@ async def tscore_detail_page(request: Request, code: str):
         title=f"{code} · 做T信号",
         code=code,
         result=result,
+        daemon_interval=int(dcfg.get("interval_seconds", 5)),
     )
 
 
 @router.get("/tscore/stream/{code}")
 async def tscore_stream(request: Request, code: str):
-    """SSE 端点：每 30s 或有变更时推送 signals 快照。"""
+    """SSE 端点：按 sse_poll_seconds（默认 1s）检查快照签名，有变化立即推。"""
     code = code.strip().zfill(6)
     if not (code.isdigit() and len(code) == 6):
         raise HTTPException(status_code=404, detail="非法股票代码")
 
+    poll_seconds = t_signals_daemon.get_sse_poll_seconds()
+
     async def event_gen():
         last_signature: str = ""
         first = True
+        last_ping = 0.0
         # 首连接：如果快照不存在，即时算一次
         snap = t_signals_daemon.get_snapshot(code)
         if snap is None:
@@ -115,21 +120,25 @@ async def tscore_stream(request: Request, code: str):
                 break
 
             snap = t_signals_daemon.get_snapshot(code)
-            if snap is None:
-                if first:
-                    snap = await run_in_threadpool(t_signals_daemon.compute_now, code)
-                    first = False
+            if snap is None and first:
+                snap = await run_in_threadpool(t_signals_daemon.compute_now, code)
 
+            now = asyncio.get_event_loop().time()
             if snap:
                 sig = f"{len(snap['signals'])}-{snap['updated_at']}"
                 if sig != last_signature or first:
                     last_signature = sig
+                    last_ping = now
                     yield {"event": "signals", "data": json.dumps(snap, ensure_ascii=False)}
                     first = False
-                else:
+                elif now - last_ping >= 15:
+                    # 保活，防 SSE 连接被代理/浏览器判超时
+                    last_ping = now
                     yield {"event": "ping", "data": snap.get("updated_at", "")}
-            else:
+            elif first or now - last_ping >= 15:
+                last_ping = now
                 yield {"event": "ping", "data": ""}
-            await asyncio.sleep(30)
+                first = False
+            await asyncio.sleep(poll_seconds)
 
     return EventSourceResponse(event_gen())

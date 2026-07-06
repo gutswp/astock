@@ -1,17 +1,20 @@
 """做T信号后台守护 + 内存快照。
 
 - 交易时段（9:30-11:30 + 13:00-15:00 工作日）每 interval 秒扫全部持仓
-- 拉分时（走 30s 缓存）→ score_opening → detect_signals
+- 拉分时（走短 TTL 缓存）→ score_opening → detect_signals
 - 快照写入 SIGNALS_STATE[code]，供 SSE 端点读取
 - 非交易时段静默 sleep
 """
 from __future__ import annotations
 
 import threading
-import time
 from datetime import datetime, time as dtime
+from pathlib import Path
 from typing import Any
 
+import yaml
+
+from astock import CONFIG_DIR
 from astock.config import AppConfig, load_config
 from astock.data.provider import get_intraday_cached
 from astock.portfolio.manager import _collect_holdings
@@ -30,6 +33,26 @@ _AM_END = dtime(11, 30)
 _PM_START = dtime(13, 0)
 _PM_END = dtime(15, 0)
 
+_DEFAULT_INTERVAL = 5
+_DEFAULT_TTL = 3
+_DEFAULT_SSE_POLL = 1
+
+
+def _load_daemon_config() -> dict:
+    p: Path = CONFIG_DIR / "settings.yaml"
+    if not p.exists():
+        return {}
+    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    return raw.get("signals_daemon") or {}
+
+
+def get_intraday_ttl() -> int:
+    return int(_load_daemon_config().get("intraday_ttl_seconds", _DEFAULT_TTL))
+
+
+def get_sse_poll_seconds() -> float:
+    return float(_load_daemon_config().get("sse_poll_seconds", _DEFAULT_SSE_POLL))
+
 
 def is_trading_hours(now: datetime | None = None) -> bool:
     now = now or datetime.now()
@@ -39,9 +62,9 @@ def is_trading_hours(now: datetime | None = None) -> bool:
     return (_AM_START <= t <= _AM_END) or (_PM_START <= t <= _PM_END)
 
 
-def _compute_one(code: str) -> dict[str, Any] | None:
+def _compute_one(code: str, ttl: int | None = None) -> dict[str, Any] | None:
     try:
-        bars, preclose = get_intraday_cached(code, ttl=30)
+        bars, preclose = get_intraday_cached(code, ttl=ttl or get_intraday_ttl())
     except Exception:
         return None
     if not bars or preclose <= 0:
@@ -64,14 +87,14 @@ def _compute_one(code: str) -> dict[str, Any] | None:
     }
 
 
-def _run_loop(stop_event: threading.Event, interval: int, config: AppConfig) -> None:
+def _run_loop(stop_event: threading.Event, interval: int, ttl: int, config: AppConfig) -> None:
     holdings = _collect_holdings(config)
     codes = list({h.code for h in holdings})
     while not stop_event.wait(interval):
         if not is_trading_hours():
             continue
         for code in codes:
-            snap = _compute_one(code)
+            snap = _compute_one(code, ttl=ttl)
             if snap is None:
                 continue
             with _STATE_LOCK:
@@ -94,14 +117,18 @@ def compute_now(code: str) -> dict[str, Any] | None:
     return snap
 
 
-def start(config: AppConfig | None = None, interval: int = 30) -> bool:
+def start(config: AppConfig | None = None, interval: int | None = None) -> bool:
     global _daemon_thread, _stop_event
     if _daemon_thread and _daemon_thread.is_alive():
         return True
     cfg = config or load_config()
+    dcfg = _load_daemon_config()
+    if interval is None:
+        interval = int(dcfg.get("interval_seconds", _DEFAULT_INTERVAL))
+    ttl = int(dcfg.get("intraday_ttl_seconds", _DEFAULT_TTL))
     _stop_event = threading.Event()
     _daemon_thread = threading.Thread(
-        target=_run_loop, args=(_stop_event, interval, cfg),
+        target=_run_loop, args=(_stop_event, interval, ttl, cfg),
         daemon=True, name="astock-signals-daemon",
     )
     _daemon_thread.start()
