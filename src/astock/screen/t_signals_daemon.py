@@ -38,6 +38,8 @@ _PUSHED_PAIRS_DATE: str | None = None
 _WARMED_UP: set[str] = set()  # 已完成"预热"的 code：首次扫时静默填充 dedup，不推
 # 每 (code, date, type) 已推过的最优价：新 push 需比历史新低更低 / 新高更高
 _LAST_EXTREME: dict[tuple, float] = {}
+# 每 (code, date) 推送状态：轮次编号 + 最后一次的方向/价格/时间，用于给推送打标签
+_ROUND_STATE: dict[tuple, dict] = {}
 _PUSH_LOCK = threading.Lock()
 
 # 价格差阈值：新信号必须比历史极值好 0.3% 才推
@@ -85,7 +87,7 @@ def _should_push_pairs() -> bool:
 
 
 def _reset_pushed_if_new_day() -> None:
-    """新交易日清空去重集合 + 预热标记 + 极值追踪."""
+    """新交易日清空去重集合 + 预热标记 + 极值追踪 + 轮次状态."""
     global _PUSHED_PAIRS_DATE
     today = datetime.now().strftime("%Y-%m-%d")
     with _PUSH_LOCK:
@@ -93,7 +95,43 @@ def _reset_pushed_if_new_day() -> None:
             _PUSHED_PAIRS.clear()
             _WARMED_UP.clear()
             _LAST_EXTREME.clear()
+            _ROUND_STATE.clear()
             _PUSHED_PAIRS_DATE = today
+
+
+def _get_round_tag(code: str, date_str: str, sig: dict) -> tuple[str, dict]:
+    """给当前推送打"第 N 次 买/卖"或"更新第 N 次"标签。
+
+    规则：方向变化 → 该方向 counter+1，标 NEW（"第 N 次买/卖入"）；
+         方向未变 → 标 UPDATE，body 附带前次时间/价格。
+    """
+    key = (code, date_str)
+    with _PUSH_LOCK:
+        state = _ROUND_STATE.setdefault(key, {
+            "buy_count": 0, "sell_count": 0,
+            "last_type": None, "last_price": 0.0, "last_time": "",
+        })
+        stype = sig["type"]
+        is_update = state["last_type"] == stype
+        if not is_update:
+            if stype == "buy":
+                state["buy_count"] += 1
+            else:
+                state["sell_count"] += 1
+        counter = state["buy_count"] if stype == "buy" else state["sell_count"]
+        prev = None
+        if is_update:
+            prev = {"time": state["last_time"], "price": state["last_price"]}
+        # 更新为当前
+        state["last_type"] = stype
+        state["last_price"] = sig["price"]
+        state["last_time"] = sig["time"]
+    action = "买入" if stype == "buy" else "卖出"
+    if is_update:
+        tag = f"第 {counter} 次{action}·价格更新"
+    else:
+        tag = f"第 {counter} 次{action}"
+    return tag, prev
 
 
 def _is_new_extreme(code: str, date_str: str, stype: str, price: float) -> bool:
@@ -115,8 +153,8 @@ def _is_new_extreme(code: str, date_str: str, stype: str, price: float) -> bool:
     return False
 
 
-def _format_signal(code: str, snap: dict[str, Any], sig: dict) -> tuple[str, str]:
-    """格式化单个信号推送 (title, body)。含对手方（如果已配对）。"""
+def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", prev: dict | None = None) -> tuple[str, str]:
+    """格式化单个信号推送 (title, body)。含轮次标签 + 前次更新参考 + 配对信息。"""
     name = _NAME_MAP.get(code, code)
     label = snap.get("label", "")
     current = snap.get("current", 0.0)
@@ -125,17 +163,25 @@ def _format_signal(code: str, snap: dict[str, Any], sig: dict) -> tuple[str, str
     action = "买入" if sig["type"] == "buy" else "卖出"
     emoji = "🔴" if sig["type"] == "buy" else "🟢"
 
-    title = f"{emoji} {name} {code} {action} @{sig['price']:.2f}"
+    if tag:
+        title = f"{emoji} {name} {code} · {tag} @{sig['price']:.2f}"
+    else:
+        title = f"{emoji} {name} {code} {action} @{sig['price']:.2f}"
 
     lines = [
         f"**{label}** · 现价 **{current:.2f}** ({change_pct:+.2f}%)",
         "",
-        f"{emoji} **{action}信号** @ **{sig['price']:.2f}**",
+        f"{emoji} **{tag or action + '信号'}** @ **{sig['price']:.2f}**",
         "",
         f"时间 {sig['time']} · 依据 **{sig['reason']}**",
     ]
 
-    # 配对信息
+    if prev:
+        # 是价格更新推送 → 显示前次
+        delta = sig["price"] - prev["price"]
+        lines.append("")
+        lines.append(f"⚠ **同轮次更新**：前次 {prev['time']} @{prev['price']:.2f} (Δ {delta:+.2f})")
+
     partner = sig.get("partner")
     partner_price = sig.get("partner_price")
     if partner and partner_price:
@@ -180,16 +226,17 @@ def _push_new_signals(code: str, snap: dict[str, Any]) -> None:
 
     for s in signals:
         # 按 bar_time 精确 dedup —— DP 每 5s 重选新的更优 buy/sell 都会推
-        # 用户可能收到"同一 T 时机的多个价格版本"，这是有意为之：让用户不错过任何机会
+        # 用户可能收到"同一 T 时机的多个价格版本"，用轮次标签区分是新事件还是更新
         key = (code, date_str, s["time"], s["type"])
         with _PUSH_LOCK:
             if key in _PUSHED_PAIRS:
                 continue
             _PUSHED_PAIRS.add(key)
         if is_warmup:
-            continue  # 预热：只填 dedup，不推
+            continue  # 预热：只填 dedup，不动 counter，不推
+        tag, prev = _get_round_tag(code, date_str, s)
         try:
-            title, body = _format_signal(code, snap, s)
+            title, body = _format_signal(code, snap, s, tag=tag, prev=prev)
             notify(title, body)
         except Exception:
             pass
