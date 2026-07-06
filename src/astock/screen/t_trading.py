@@ -11,6 +11,7 @@ from rich.table import Table
 from astock.config import AppConfig
 from astock.data.http import curl_get
 from astock.data.provider import _em_secid, get_spot
+from astock.screen.t_signals import detect_signals
 
 
 def _parse_trend_bar(row: str) -> dict | None:
@@ -261,6 +262,13 @@ def build_tscore_results(
             result = score_opening(bars, preclose)
             result["code"] = code
             result["name"] = name_map.get(code, code)
+            result["full_bars"] = bars
+            result["chart_times"] = [b["time"][11:16] for b in bars]
+            result["chart_closes"] = [round(b["close"], 2) for b in bars]
+            result["chart_vwaps"] = [round(b["vwap"], 2) for b in bars]
+            result["signals"] = detect_signals(
+                bars, preclose, result.get("label", ""), code=code
+            )
             results.append(result)
         except Exception as exc:
             if console:

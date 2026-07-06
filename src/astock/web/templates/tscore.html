@@ -35,13 +35,16 @@
         <th class="text-center">判定</th>
         <th class="text-right">现价</th>
         <th class="text-right">vs昨收</th>
+        <th class="text-center">信号</th>
         <th>做T策略</th>
       </tr>
     </thead>
     <tbody>
       {% for r in results %}
       <tr>
-        <td class="font-medium">{{ r.name }}</td>
+        <td class="font-medium">
+          <a href="/tscore/{{ r.code }}" class="hover:underline">{{ r.name }}</a>
+        </td>
         <td class="text-gray-400 font-mono">{{ r.code }}</td>
         <td class="text-center font-bold num {% if r.score > 0 %}pos{% elif r.score < 0 %}neg{% endif %}">
           {{ "%+d"|format(r.score) }}
@@ -57,6 +60,15 @@
         <td class="text-right num">{{ "%.2f"|format(r.current) }}</td>
         <td class="text-right num {% if r.change_pct > 0 %}pos{% elif r.change_pct < 0 %}neg{% endif %}">
           {{ "%+.2f%%"|format(r.change_pct) }}
+        </td>
+        <td class="text-center num">
+          {% set buys = r.signals|selectattr('type', 'equalto', 'buy')|list %}
+          {% set sells = r.signals|selectattr('type', 'equalto', 'sell')|list %}
+          {% if buys or sells %}
+          <span class="pos">红{{ buys|length }}</span> · <span class="neg">绿{{ sells|length }}</span>
+          {% else %}
+          <span class="text-gray-600">-</span>
+          {% endif %}
         </td>
         <td class="text-sm text-gray-300">{{ r.strategy }}</td>
       </tr>
@@ -75,15 +87,25 @@
         <span class="font-bold text-white">{{ r.name }}</span>
         <span class="text-gray-500 font-mono text-sm ml-1">{{ r.code }}</span>
       </div>
-      <div>
+      <div class="flex items-center gap-2">
         {% if r.label == '强势' %}<span class="badge" style="background:#7f1d1d;color:#fca5a5">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
         {% elif r.label == '偏强' %}<span class="badge" style="background:#713f12;color:#fde68a">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
         {% elif r.label == '震荡' %}<span class="badge" style="background:#1e3a5f;color:#93c5fd">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
         {% elif r.label == '偏弱' %}<span class="badge" style="background:#14532d;color:#86efac">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
         {% elif r.label == '弱势' %}<span class="badge" style="background:#052e16;color:#4ade80">{{ r.label }} {{ "%+d"|format(r.score) }}</span>
         {% else %}<span class="badge">{{ r.label }} {{ "%+d"|format(r.score) }}</span>{% endif %}
+        <a href="/tscore/{{ r.code }}" class="text-xs text-blue-400 hover:underline">大图 →</a>
       </div>
     </div>
+
+    {% if r.chart_times %}
+    <div class="mini-chart mb-3" style="height:200px" id="mini-{{ r.code }}"
+         data-times='{{ r.chart_times|tojson }}'
+         data-closes='{{ r.chart_closes|tojson }}'
+         data-vwaps='{{ r.chart_vwaps|tojson }}'
+         data-signals='{{ r.signals|tojson }}'></div>
+    {% endif %}
+
     <table class="data text-sm">
       <thead>
         <tr><th>指标</th><th class="text-center">分数</th><th>说明</th></tr>
@@ -102,6 +124,18 @@
     <div class="mt-3 text-sm text-gray-400 border-t border-gray-800 pt-2">
       {{ r.strategy }}
     </div>
+    {% if r.signals %}
+    <div class="mt-2 text-xs text-gray-500">
+      {% for s in r.signals %}
+      <span class="mr-2">
+        {% if s.type == 'buy' %}<span class="pos font-semibold">{{ s.marker }}</span>{% else %}<span class="neg font-semibold">{{ s.marker }}</span>{% endif %}
+        <span class="text-gray-400">{{ s.time }}</span>
+        <span class="text-gray-300">{{ s.reason }}</span>
+        <span class="num">@{{ "%.2f"|format(s.price) }}</span>
+      </span>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
   {% endif %}
   {% endfor %}
@@ -111,4 +145,81 @@
   暂无可用评分结果，请稍后重试，或输入指定股票代码。
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  function renderMini(el) {
+    const times = JSON.parse(el.dataset.times || '[]');
+    const closes = JSON.parse(el.dataset.closes || '[]');
+    const vwaps = JSON.parse(el.dataset.vwaps || '[]');
+    const signals = JSON.parse(el.dataset.signals || '[]');
+    if (!times.length) return;
+
+    const markData = signals.map(s => ({
+      name: s.marker,
+      coord: [s.time, s.price],
+      value: s.marker,
+      label: {
+        show: true,
+        formatter: s.marker,
+        color: '#ffffff',
+        fontSize: 10,
+        fontWeight: 'bold',
+      },
+      itemStyle: {
+        color: s.type === 'buy' ? '#ef4444' : '#22c55e',
+        borderColor: '#0b1220',
+        borderWidth: 1.5,
+      },
+      symbol: 'circle',
+      symbolSize: 22,
+    }));
+
+    const chart = echarts.init(el, 'dark');
+    chart.setOption({
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {trigger: 'axis', axisPointer: {type: 'line'}},
+      grid: {left: 42, right: 12, top: 10, bottom: 22},
+      xAxis: {
+        type: 'category',
+        data: times,
+        axisLine: {lineStyle: {color: '#374151'}},
+        axisLabel: {color: '#94a3b8', fontSize: 10},
+      },
+      yAxis: {
+        scale: true,
+        axisLine: {show: false},
+        axisLabel: {color: '#94a3b8', fontSize: 10},
+        splitLine: {lineStyle: {color: '#1f2937'}},
+      },
+      series: [
+        {
+          name: '收盘',
+          type: 'line',
+          data: closes,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: {width: 1.5, color: '#f87171'},
+          markPoint: markData.length ? {data: markData} : undefined,
+        },
+        {
+          name: '均价',
+          type: 'line',
+          data: vwaps,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: {width: 1.5, color: '#60a5fa'},
+        },
+      ],
+    });
+
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  document.querySelectorAll('.mini-chart').forEach(renderMini);
+})();
+</script>
 {% endblock %}
