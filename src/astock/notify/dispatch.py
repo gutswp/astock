@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from astock import CONFIG_DIR
-from astock.notify import mail, serverchan
+from astock.notify import feishu, mail, serverchan
 
 
 def _notify_config() -> dict:
@@ -33,6 +33,14 @@ def notify(title: str, body: str) -> list[str]:
         try:
             serverchan.push(sc["sendkey"], title, body)
             sent.append("serverchan")
+        except Exception:
+            pass
+
+    fs = cfg.get("feishu") or {}
+    if fs.get("enabled") and fs.get("webhook"):
+        try:
+            feishu.push(fs["webhook"], title, body)
+            sent.append("feishu")
         except Exception:
             pass
 

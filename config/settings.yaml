@@ -65,6 +65,9 @@ notify:
   serverchan:
     enabled: false
     sendkey: ""              # https://sct.ftqq.com
+  feishu:
+    enabled: true            # 飞书自定义机器人（免费无上限、锁屏响铃、适合做T实时推）
+    webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/0d7c361f-b363-4fc1-b6da-c227b53c03b6"
   mail:
     enabled: false
     smtp_host: smtp.qq.com
@@ -77,3 +80,5 @@ notify:
   push_ai_reports:
     advise: false            # 决策报告完成时推
     review: false            # 复盘报告完成时推
+  # 做T信号推送：signals_daemon 每形成一个新的 buy-sell 完整对时推
+  push_tscore_pairs: true    # 关：不推；开：飞书/Server酱/邮件按启用的通道推
