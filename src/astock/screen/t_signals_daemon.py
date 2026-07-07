@@ -22,7 +22,7 @@ from astock.config import AppConfig, load_config
 from astock.data.provider import get_intraday_cached
 from astock.notify.dispatch import notify
 from astock.portfolio.manager import _collect_holdings
-from astock.screen.t_signals import detect_signals
+from astock.screen.t_signals import detect_signals, iter_online_signals, new_online_state
 from astock.screen.t_trading import score_opening
 
 # code -> {"result": <score dict>, "signals": [...], "updated_at": iso_time}
@@ -32,16 +32,11 @@ _STATE_LOCK = threading.Lock()
 # 名称缓存：code -> name
 _NAME_MAP: dict[str, str] = {}
 
-# 已推送去重：(code, date_str, bar_time, type) → True
-_PUSHED_PAIRS: set[tuple] = set()
 _PUSHED_PAIRS_DATE: str | None = None
-_WARMED_UP: set[str] = set()  # 已完成"预热"的 code：首次扫时静默填充 dedup，不推
-# 每 (code, date) 推送状态：轮次编号 + 最后一次的方向/价格/时间 + 当前轮已推最优价
-_ROUND_STATE: dict[tuple, dict] = {}
+_WARMED_UP: set[str] = set()  # 已完成"预热"的 code：首次扫只推进状态、不推，防重启轰炸
+# 每个 code 的在线检测状态（因果式状态机，供实时推送）
+_ONLINE_STATE: dict[str, dict] = {}
 _PUSH_LOCK = threading.Lock()
-
-# 同向"价格更新"再推的门槛：新价格要比上次已推的价好至少 0.5% 才提醒，否则吞掉
-_UPDATE_MIN_IMPROVE_PCT = 0.005
 
 _daemon_thread: threading.Thread | None = None
 _stop_event: threading.Event | None = None
@@ -85,67 +80,18 @@ def _should_push_pairs() -> bool:
 
 
 def _reset_pushed_if_new_day() -> None:
-    """新交易日清空去重集合 + 预热标记 + 轮次状态."""
+    """新交易日清空预热标记 + 在线检测状态."""
     global _PUSHED_PAIRS_DATE
     today = datetime.now().strftime("%Y-%m-%d")
     with _PUSH_LOCK:
         if _PUSHED_PAIRS_DATE != today:
-            _PUSHED_PAIRS.clear()
             _WARMED_UP.clear()
-            _ROUND_STATE.clear()
+            _ONLINE_STATE.clear()
             _PUSHED_PAIRS_DATE = today
 
 
-def _evaluate_push(code: str, date_str: str, sig: dict) -> tuple[bool, str, dict | None]:
-    """决定是否推送 + 打标签。返回 (是否推送, tag, 前次参考)。
-
-    - 方向变化（新一轮）→ 必推，标 "第 N 次买/卖入"，counter+1
-    - 同向更新 → 仅当价格显著变好才推（买更低 / 卖更高，≥ _UPDATE_MIN_IMPROVE_PCT）：
-        DP 每 ~7s 重选一次最优 buy/sell，价格常常只飘 0.01~0.05 元，这类微更新
-        无操作意义，直接吞掉，避免刷屏。真正更好的价位（≥0.5%）才提醒。
-    """
-    key = (code, date_str)
-    with _PUSH_LOCK:
-        state = _ROUND_STATE.setdefault(key, {
-            "buy_count": 0, "sell_count": 0,
-            "last_type": None, "last_price": 0.0, "last_time": "",
-            "anchor_price": 0.0,
-        })
-        stype = sig["type"]
-        price = sig["price"]
-        is_update = state["last_type"] == stype
-
-        if is_update:
-            anchor = state["anchor_price"] or state["last_price"]
-            if stype == "buy":
-                improved = price < anchor * (1 - _UPDATE_MIN_IMPROVE_PCT)
-            else:
-                improved = price > anchor * (1 + _UPDATE_MIN_IMPROVE_PCT)
-            if not improved:
-                return False, "", None  # 微更新，不推
-            counter = state["buy_count"] if stype == "buy" else state["sell_count"]
-            prev = {"time": state["last_time"], "price": state["last_price"]}
-            action = "买入" if stype == "buy" else "卖出"
-            tag = f"第 {counter} 次{action}·更优价"
-        else:
-            if stype == "buy":
-                state["buy_count"] += 1
-            else:
-                state["sell_count"] += 1
-            counter = state["buy_count"] if stype == "buy" else state["sell_count"]
-            prev = None
-            action = "买入" if stype == "buy" else "卖出"
-            tag = f"第 {counter} 次{action}"
-
-        state["last_type"] = stype
-        state["last_price"] = price
-        state["last_time"] = sig["time"]
-        state["anchor_price"] = price
-    return True, tag, prev
-
-
-def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", prev: dict | None = None) -> tuple[str, str]:
-    """格式化单个信号推送 (title, body)。含轮次标签 + 前次更新参考 + 配对信息。"""
+def _format_signal(code: str, snap: dict[str, Any], sig: dict) -> tuple[str, str]:
+    """格式化单个在线信号推送 (title, body)。含配对盈利信息。"""
     name = _NAME_MAP.get(code, code)
     label = snap.get("label", "")
     current = snap.get("current", 0.0)
@@ -154,25 +100,15 @@ def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", pr
     action = "买入" if sig["type"] == "buy" else "卖出"
     emoji = "🔴" if sig["type"] == "buy" else "🟢"
 
-    if tag:
-        title = f"{emoji} {name} {code} · {tag} @{sig['price']:.2f}"
-    else:
-        title = f"{emoji} {name} {code} {action} @{sig['price']:.2f}"
+    title = f"{emoji} {name} {code} {action} @{sig['price']:.2f}"
 
     lines = [
         f"**{label}** · 现价 **{current:.2f}** ({change_pct:+.2f}%)",
         "",
-        f"{emoji} **{tag or action + '信号'}** @ **{sig['price']:.2f}**",
+        f"{emoji} **{sig.get('marker', action)} · {action}** @ **{sig['price']:.2f}**",
         "",
         f"时间 {sig['time']} · 依据 **{sig['reason']}**",
     ]
-
-    if prev:
-        # 更优价推送 → 显示比前次好多少
-        delta = sig["price"] - prev["price"]
-        better = "更低" if sig["type"] == "buy" else "更高"
-        lines.append("")
-        lines.append(f"↗ **同向{better}价**：前次 {prev['time']} @{prev['price']:.2f} → 现 {sig['price']:.2f} (Δ {delta:+.2f})")
 
     partner = sig.get("partner")
     partner_price = sig.get("partner_price")
@@ -180,56 +116,45 @@ def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", pr
         profit = (partner_price - sig["price"]) if sig["type"] == "buy" else (sig["price"] - partner_price)
         profit_pct = profit / min(sig["price"], partner_price) * 100
         lines.append("")
-        lines.append(f"配对 → **{partner}** @ {partner_price:.2f}")
+        lines.append(f"平T配对 → **{partner}** @ {partner_price:.2f}")
         lines.append(f"**Δ {profit:+.2f} 元 ({profit_pct:+.2f}%)** · 1000 股 ≈ **{profit*1000:+.0f}** 元")
 
     lines.append("")
-    lines.append(f"⚡ **立即执行**（做T仓 1000 股）")
+    lines.append("⚡ **立即执行**（做T仓 1000 股）")
 
     return title, "\n".join(lines)
 
 
-def _push_new_signals(code: str, snap: dict[str, Any]) -> None:
-    """从 DP-selected snapshot signals 推送新出现的信号。
+def _push_online_signals(code: str, snap: dict[str, Any], bars: list[dict], preclose: float, label: str) -> None:
+    """因果式实时推送：只把刚收完的 bar 走一遍在线状态机，触发即推。
 
-    daemon 每 5s 扫一次，比较当前 vs 上次 snapshot，推送新增的信号（同一
-    信号只推一次）。DP 天然限制 3-6 对/天 = 6-12 push/单只票，量可控。
-
-    dedup key: (code, date, bar_time, type)。
-    首次调用 warmup：填 dedup 集合，不推 —— 防 daemon 启动/重启时轰炸。
+    与旧的 DP-diff 推送不同：不回头改历史、买卖天然交替，signal 时间永远是
+    最新那根 bar（滞后仅 2 分钟确认延迟）。首次扫 warmup：只推进状态、不推，
+    防 daemon 启动/重启时把当天已发生的信号一次性轰炸出去。
     """
     if not _should_push_pairs():
         return
-    signals = snap.get("signals") or []
-    if not signals:
+    if not bars or preclose <= 0 or label in {"数据不足", ""}:
         return
 
     _reset_pushed_if_new_day()
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
 
-    is_warmup = code not in _WARMED_UP
-    if is_warmup:
-        _WARMED_UP.add(code)
-
-    def _bucket(hhmm: str, minutes: int = 15) -> int:
-        """（已弃用）15 分钟桶。当前只按 bar_time 精确 dedup。"""
-        hh, mm = int(hhmm[:2]), int(hhmm[3:5])
-        return (hh * 60 + mm) // minutes
-
-    for s in signals:
-        # 按 bar_time 精确 dedup：同一根 bar 的同向信号只处理一次
-        key = (code, date_str, s["time"], s["type"])
-        with _PUSH_LOCK:
-            if key in _PUSHED_PAIRS:
-                continue
-            _PUSHED_PAIRS.add(key)
+    with _PUSH_LOCK:
+        state = _ONLINE_STATE.get(code)
+        if state is None or state.get("date") != today:
+            state = new_online_state()
+            state["date"] = today
+            _ONLINE_STATE[code] = state
+        is_warmup = code not in _WARMED_UP
+        emitted = iter_online_signals(bars, preclose, label, code, state)
         if is_warmup:
-            continue  # 预热：只填 dedup，不动 counter，不推
-        emit, tag, prev = _evaluate_push(code, date_str, s)
-        if not emit:
-            continue  # 同向微更新，价格没显著变好，吞掉不推
+            _WARMED_UP.add(code)
+            emitted = []  # 预热：状态已推进到当前，但本轮不推
+
+    for s in emitted:
         try:
-            title, body = _format_signal(code, snap, s, tag=tag, prev=prev)
+            title, body = _format_signal(code, snap, s)
             notify(title, body)
         except Exception:
             pass
@@ -267,9 +192,9 @@ def _compute_one(code: str, ttl: int | None = None) -> dict[str, Any] | None:
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
 
-    # DP 输出里出现的新信号立即推送（每信号推一次，含配对信息）
+    # 实时推送走因果式在线检测（DP 输出仅用于网页/回测展示）
     try:
-        _push_new_signals(code, snap)
+        _push_online_signals(code, snap, bars, preclose, label)
     except Exception:
         pass
 

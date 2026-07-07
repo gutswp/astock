@@ -307,6 +307,132 @@ def _tail_suppress_start(bars: list[dict]) -> int:
     return len(bars)
 
 
+# ---------- 实时在线检测（因果式，供推送用） ----------
+#
+# detect_signals 是全局 DP 事后最优：随行情推进会把历史 bar 重新选进最优解，
+# 导致"买卖信号一起、时间已过"的滞后推送。实时推送必须"只看刚收完的 bar、
+# 触发即产出、绝不回头改历史"。iter_online_signals 用状态机实现这一点：
+#   - 每个 code 维护一份 state（处理进度 + 持仓阶段）
+#   - 只处理"已可确认"的 bar（i+2 已到，避免用未成形 bar 误判）
+#   - flat→按 label 方向开一腿（正T先买/倒T先卖/震荡皆可）；持仓中→等反向腿平掉
+#   - 买卖天然交替，不可能同时冒出；signal 时间永远是最新那根 bar
+
+
+def new_online_state() -> dict:
+    """初始化一个 code 当日的在线检测状态。"""
+    return {
+        "processed_to": _MIN_INDEX - 1,
+        "pos": "flat",          # flat / long(已买待卖) / short(已卖待买)
+        "entry_price": 0.0,
+        "entry_time": "",
+        "entry_marker": "",
+        "buy_n": 0,
+        "sell_n": 0,
+    }
+
+
+def _fire_reason(bars: list[dict], i: int, want: str, preclose: float, code: str, tail_start: int) -> str | None:
+    """在 bar i 上按方向跑检测器，命中返回 reason，否则 None。"""
+    if _is_limit(bars[i], preclose, code):
+        return None
+    if want == "buy":
+        if i >= tail_start:
+            return None  # 尾盘不开/不平买
+        detectors = _BUY_DETECTORS
+    else:
+        detectors = _SELL_DETECTORS
+    for reason, fn in detectors:
+        if fn(bars, i):
+            return reason
+    return None
+
+
+def iter_online_signals(
+    bars: list[dict],
+    preclose: float,
+    label: str,
+    code: str,
+    state: dict,
+    min_gap_pct: float = 0.003,
+    min_gap_abs: float = 0.005,
+) -> list[dict]:
+    """因果式增量检测：推进 state，返回本次新产出的信号（通常 0~1 个）。
+
+    与 detect_signals 的区别：不做全局 DP、不回头改历史。只把 state.processed_to
+    之后、已可确认（i+2 到位）的 bar 逐根走一遍状态机，触发即产出。
+    """
+    if not bars or preclose <= 0 or label in {"数据不足", ""}:
+        return []
+
+    tail_start = _tail_suppress_start(bars)
+    # 方向：强势/偏强 倒T(先卖后买)；弱势/偏弱 正T(先买后卖)；震荡 双向
+    if label in {"强势", "偏强"}:
+        open_dirs = ("sell",)
+    elif label in {"弱势", "偏弱"}:
+        open_dirs = ("buy",)
+    else:
+        open_dirs = ("buy", "sell")
+
+    def _emit(i: int, stype: str, reason: str) -> dict:
+        bar = bars[i]
+        price = round(bar["close"], 2)
+        if stype == "buy":
+            state["buy_n"] += 1
+            seq = state["buy_n"]
+        else:
+            state["sell_n"] += 1
+            seq = state["sell_n"]
+        marker = f"红{seq}" if stype == "buy" else f"绿{seq}"
+        return {
+            "index": i, "time": _hhmm(bar), "price": price,
+            "type": stype, "reason": reason, "seq": seq, "marker": marker,
+        }
+
+    emitted: list[dict] = []
+    last_confirmable = len(bars) - 3  # 检测器需 i+2 确认
+    start = max(state["processed_to"] + 1, _MIN_INDEX)
+    for i in range(start, last_confirmable + 1):
+        state["processed_to"] = i
+        pos = state["pos"]
+        price = round(bars[i]["close"], 2)
+
+        if pos == "flat":
+            for want in open_dirs:
+                reason = _fire_reason(bars, i, want, preclose, code, tail_start)
+                if reason:
+                    sig = _emit(i, want, reason)
+                    state["pos"] = "long" if want == "buy" else "short"
+                    state["entry_price"] = price
+                    state["entry_time"] = sig["time"]
+                    state["entry_marker"] = sig["marker"]
+                    emitted.append(sig)
+                    break
+
+        elif pos == "long":  # 已买，等卖平（卖价须 ≥ 买价+gap）
+            reason = _fire_reason(bars, i, "sell", preclose, code, tail_start)
+            if reason:
+                gap = max(min_gap_abs, state["entry_price"] * min_gap_pct)
+                if price >= state["entry_price"] + gap:
+                    sig = _emit(i, "sell", reason)
+                    sig["partner"] = state["entry_marker"]
+                    sig["partner_price"] = state["entry_price"]
+                    state["pos"] = "flat"
+                    emitted.append(sig)
+
+        elif pos == "short":  # 已卖，等买平（买价须 ≤ 卖价-gap）
+            reason = _fire_reason(bars, i, "buy", preclose, code, tail_start)
+            if reason:
+                gap = max(min_gap_abs, state["entry_price"] * min_gap_pct)
+                if price <= state["entry_price"] - gap:
+                    sig = _emit(i, "buy", reason)
+                    sig["partner"] = state["entry_marker"]
+                    sig["partner_price"] = state["entry_price"]
+                    state["pos"] = "flat"
+                    emitted.append(sig)
+
+    return emitted
+
+
 def detect_signals(
     bars: list[dict],
     preclose: float,
