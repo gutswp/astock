@@ -36,14 +36,12 @@ _NAME_MAP: dict[str, str] = {}
 _PUSHED_PAIRS: set[tuple] = set()
 _PUSHED_PAIRS_DATE: str | None = None
 _WARMED_UP: set[str] = set()  # 已完成"预热"的 code：首次扫时静默填充 dedup，不推
-# 每 (code, date, type) 已推过的最优价：新 push 需比历史新低更低 / 新高更高
-_LAST_EXTREME: dict[tuple, float] = {}
-# 每 (code, date) 推送状态：轮次编号 + 最后一次的方向/价格/时间，用于给推送打标签
+# 每 (code, date) 推送状态：轮次编号 + 最后一次的方向/价格/时间 + 当前轮已推最优价
 _ROUND_STATE: dict[tuple, dict] = {}
 _PUSH_LOCK = threading.Lock()
 
-# 价格差阈值：新信号必须比历史极值好 0.3% 才推
-_EXTREME_THRESHOLD_PCT = 0.003
+# 同向"价格更新"再推的门槛：新价格要比上次已推的价好至少 0.5% 才提醒，否则吞掉
+_UPDATE_MIN_IMPROVE_PCT = 0.005
 
 _daemon_thread: threading.Thread | None = None
 _stop_event: threading.Event | None = None
@@ -87,70 +85,63 @@ def _should_push_pairs() -> bool:
 
 
 def _reset_pushed_if_new_day() -> None:
-    """新交易日清空去重集合 + 预热标记 + 极值追踪 + 轮次状态."""
+    """新交易日清空去重集合 + 预热标记 + 轮次状态."""
     global _PUSHED_PAIRS_DATE
     today = datetime.now().strftime("%Y-%m-%d")
     with _PUSH_LOCK:
         if _PUSHED_PAIRS_DATE != today:
             _PUSHED_PAIRS.clear()
             _WARMED_UP.clear()
-            _LAST_EXTREME.clear()
             _ROUND_STATE.clear()
             _PUSHED_PAIRS_DATE = today
 
 
-def _get_round_tag(code: str, date_str: str, sig: dict) -> tuple[str, dict]:
-    """给当前推送打"第 N 次 买/卖"或"更新第 N 次"标签。
+def _evaluate_push(code: str, date_str: str, sig: dict) -> tuple[bool, str, dict | None]:
+    """决定是否推送 + 打标签。返回 (是否推送, tag, 前次参考)。
 
-    规则：方向变化 → 该方向 counter+1，标 NEW（"第 N 次买/卖入"）；
-         方向未变 → 标 UPDATE，body 附带前次时间/价格。
+    - 方向变化（新一轮）→ 必推，标 "第 N 次买/卖入"，counter+1
+    - 同向更新 → 仅当价格显著变好才推（买更低 / 卖更高，≥ _UPDATE_MIN_IMPROVE_PCT）：
+        DP 每 ~7s 重选一次最优 buy/sell，价格常常只飘 0.01~0.05 元，这类微更新
+        无操作意义，直接吞掉，避免刷屏。真正更好的价位（≥0.5%）才提醒。
     """
     key = (code, date_str)
     with _PUSH_LOCK:
         state = _ROUND_STATE.setdefault(key, {
             "buy_count": 0, "sell_count": 0,
             "last_type": None, "last_price": 0.0, "last_time": "",
+            "anchor_price": 0.0,
         })
         stype = sig["type"]
+        price = sig["price"]
         is_update = state["last_type"] == stype
-        if not is_update:
+
+        if is_update:
+            anchor = state["anchor_price"] or state["last_price"]
+            if stype == "buy":
+                improved = price < anchor * (1 - _UPDATE_MIN_IMPROVE_PCT)
+            else:
+                improved = price > anchor * (1 + _UPDATE_MIN_IMPROVE_PCT)
+            if not improved:
+                return False, "", None  # 微更新，不推
+            counter = state["buy_count"] if stype == "buy" else state["sell_count"]
+            prev = {"time": state["last_time"], "price": state["last_price"]}
+            action = "买入" if stype == "buy" else "卖出"
+            tag = f"第 {counter} 次{action}·更优价"
+        else:
             if stype == "buy":
                 state["buy_count"] += 1
             else:
                 state["sell_count"] += 1
-        counter = state["buy_count"] if stype == "buy" else state["sell_count"]
-        prev = None
-        if is_update:
-            prev = {"time": state["last_time"], "price": state["last_price"]}
-        # 更新为当前
+            counter = state["buy_count"] if stype == "buy" else state["sell_count"]
+            prev = None
+            action = "买入" if stype == "buy" else "卖出"
+            tag = f"第 {counter} 次{action}"
+
         state["last_type"] = stype
-        state["last_price"] = sig["price"]
+        state["last_price"] = price
         state["last_time"] = sig["time"]
-    action = "买入" if stype == "buy" else "卖出"
-    if is_update:
-        tag = f"第 {counter} 次{action}·价格更新"
-    else:
-        tag = f"第 {counter} 次{action}"
-    return tag, prev
-
-
-def _is_new_extreme(code: str, date_str: str, stype: str, price: float) -> bool:
-    """判断是否新极值：buy 需比历史新低更低、sell 需比历史新高更高。"""
-    key = (code, date_str, stype)
-    with _PUSH_LOCK:
-        current = _LAST_EXTREME.get(key)
-        if current is None:
-            _LAST_EXTREME[key] = price
-            return True
-        if stype == "buy":
-            if price < current * (1 - _EXTREME_THRESHOLD_PCT):
-                _LAST_EXTREME[key] = price
-                return True
-        else:  # sell
-            if price > current * (1 + _EXTREME_THRESHOLD_PCT):
-                _LAST_EXTREME[key] = price
-                return True
-    return False
+        state["anchor_price"] = price
+    return True, tag, prev
 
 
 def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", prev: dict | None = None) -> tuple[str, str]:
@@ -177,10 +168,11 @@ def _format_signal(code: str, snap: dict[str, Any], sig: dict, tag: str = "", pr
     ]
 
     if prev:
-        # 是价格更新推送 → 显示前次
+        # 更优价推送 → 显示比前次好多少
         delta = sig["price"] - prev["price"]
+        better = "更低" if sig["type"] == "buy" else "更高"
         lines.append("")
-        lines.append(f"⚠ **同轮次更新**：前次 {prev['time']} @{prev['price']:.2f} (Δ {delta:+.2f})")
+        lines.append(f"↗ **同向{better}价**：前次 {prev['time']} @{prev['price']:.2f} → 现 {sig['price']:.2f} (Δ {delta:+.2f})")
 
     partner = sig.get("partner")
     partner_price = sig.get("partner_price")
@@ -225,8 +217,7 @@ def _push_new_signals(code: str, snap: dict[str, Any]) -> None:
         return (hh * 60 + mm) // minutes
 
     for s in signals:
-        # 按 bar_time 精确 dedup —— DP 每 5s 重选新的更优 buy/sell 都会推
-        # 用户可能收到"同一 T 时机的多个价格版本"，用轮次标签区分是新事件还是更新
+        # 按 bar_time 精确 dedup：同一根 bar 的同向信号只处理一次
         key = (code, date_str, s["time"], s["type"])
         with _PUSH_LOCK:
             if key in _PUSHED_PAIRS:
@@ -234,7 +225,9 @@ def _push_new_signals(code: str, snap: dict[str, Any]) -> None:
             _PUSHED_PAIRS.add(key)
         if is_warmup:
             continue  # 预热：只填 dedup，不动 counter，不推
-        tag, prev = _get_round_tag(code, date_str, s)
+        emit, tag, prev = _evaluate_push(code, date_str, s)
+        if not emit:
+            continue  # 同向微更新，价格没显著变好，吞掉不推
         try:
             title, body = _format_signal(code, snap, s, tag=tag, prev=prev)
             notify(title, body)
