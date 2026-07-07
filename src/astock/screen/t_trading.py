@@ -103,7 +103,23 @@ def get_intraday_sessions(code: str, ndays: int = 20) -> list[dict]:
 def score_opening(bars: list[dict], preclose: float) -> dict:
     """对开盘前15分钟打分，返回分类和分数明细."""
     if len(bars) < 10:
-        return {"score": 0, "label": "数据不足", "details": [], "strategy": "", "first_15": []}
+        current = bars[-1]["close"] if bars else 0.0
+        vwap = bars[-1]["vwap"] if bars else current
+        change_pct = (current - preclose) / preclose * 100 if preclose else 0.0
+        return {
+            "score": 0,
+            "label": "数据不足",
+            "details": [],
+            "strategy": "",
+            "vwap": vwap,
+            "current": current,
+            "preclose": preclose,
+            "change_pct": change_pct,
+            "bar_count": len(bars),
+            "first_wave": 0.0,
+            "vwap_ratio": 0.0,
+            "first_15": [],
+        }
 
     first_15 = [b for b in bars if b["time"][11:16] <= "09:45"]
     if len(first_15) < 5:
