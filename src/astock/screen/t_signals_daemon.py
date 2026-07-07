@@ -22,7 +22,7 @@ from astock.config import AppConfig, load_config
 from astock.data.provider import get_intraday_cached
 from astock.notify.dispatch import notify
 from astock.portfolio.manager import _collect_holdings
-from astock.screen.t_signals import detect_signals, iter_online_signals, new_online_state
+from astock.screen.t_signals import detect_signals_online, iter_online_signals, new_online_state
 from astock.screen.t_trading import score_opening
 
 # code -> {"result": <score dict>, "signals": [...], "updated_at": iso_time}
@@ -177,7 +177,7 @@ def _compute_one(code: str, ttl: int | None = None) -> dict[str, Any] | None:
         return None
     scored = score_opening(bars, preclose)
     label = scored.get("label", "")
-    signals = detect_signals(bars, preclose, label, code=code)
+    signals = detect_signals_online(bars, preclose, label, code=code)
     snap = {
         "code": code,
         "label": label,

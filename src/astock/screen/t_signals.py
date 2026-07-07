@@ -386,6 +386,7 @@ def iter_online_signals(
         return {
             "index": i, "time": _hhmm(bar), "price": price,
             "type": stype, "reason": reason, "seq": seq, "marker": marker,
+            "note": f"{marker} · {reason} @ {price:.2f}",
         }
 
     emitted: list[dict] = []
@@ -431,6 +432,25 @@ def iter_online_signals(
                     emitted.append(sig)
 
     return emitted
+
+
+def detect_signals_online(
+    bars: list[dict],
+    preclose: float,
+    label: str,
+    code: str = "",
+    min_gap_pct: float = 0.003,
+    min_gap_abs: float = 0.005,
+) -> list[dict]:
+    """一次性跑完整天 bar 的因果信号（等价于实时逐根累积的结果）。
+
+    供网页 /tscore、明细页、回测用：从全新 state 把整天走一遍，返回全部
+    因果产出的买卖点。和实时推送用的 iter_online_signals 同一套逻辑，
+    保证"网页看到的"就是"当时会推的"，不再有 DP 事后诸葛。
+    """
+    state = new_online_state()
+    return iter_online_signals(bars, preclose, label, code, state,
+                               min_gap_pct=min_gap_pct, min_gap_abs=min_gap_abs)
 
 
 def detect_signals(
