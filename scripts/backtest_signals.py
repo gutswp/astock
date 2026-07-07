@@ -1,130 +1,118 @@
 """做T信号回测：拉过去 N 天分时 → 每天跑 detect_signals → 汇总指标.
 
 数据源：tencent gtimg `kline/mkline` 1min k线（含 OHLC + volume），锚点向前翻。
-- vwap 由 close × volume 累积估算
-- 覆盖约 20 交易日历史
+- 覆盖约最近 20 交易日的 1 分钟历史（与实盘 trends2 同粒度）
+- vwap 由 amount(≈close×vol) 累积估算，逼近 eastmoney 均价线
 
-指标：
-- day_low_gap: buy 距日内最低 pct
-- day_high_gap: sell 距日内最高 pct
-- profit: sell.price - buy.price (每对)
-- 负 profit 对数（应 = 0 才对）
-- 覆盖率：抓到的最优对 profit / 理论最优(day_high - day_low)
+核心指标（回答"是否抓到最佳买卖点 + 配对是否合理"）：
+- best_buy_gap:  最优买点距日内最低 pct（越小越好，0=买在最低）
+- best_sell_gap: 最优卖点距日内最高 pct（越小越好，0=卖在最高）
+- n_losing:      亏损对数（买价≥卖价，应为 0）
+- coverage:      总盈利 / 日振幅（抓住了多少肉）
+- orphans:       未配对信号数（应为 0）
 
-跑法：python -m scripts.backtest_signals
+跑法：PYTHONPATH=src python -m scripts.backtest_signals
 """
 from __future__ import annotations
 
 import json
 import statistics
+import subprocess
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from astock.data.http import curl_get
 from astock.screen.t_signals import detect_signals
 from astock.screen.t_trading import score_opening
 
 BACKTEST_CACHE = Path(__file__).resolve().parent.parent / "data" / "backtest_cache"
 BACKTEST_CACHE.mkdir(parents=True, exist_ok=True)
 
+START_DATE = "20260601"  # 回测起始（腾讯 1min 实际最早约 6/8）
+
+HOLDINGS = [
+    "002230", "002298", "002153", "512660", "600011",
+    "000063", "002266", "515230", "601138", "159869",
+    "603236", "002312", "600111", "002902", "002085",
+    "600645", "601888", "000505", "002241", "600410",
+]
+
 
 def _exchange(code: str) -> str:
     return "sh" if code.startswith(("6", "5", "9")) else "sz"
 
 
-def _fetch_batch(code: str, anchor: str) -> list[list]:
+def _fetch_batch(code: str, anchor: str, retries: int = 5) -> list[list]:
     ex = _exchange(code)
     url = (
         f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?"
         f"param={ex}{code},m1,{anchor},500"
     )
-    raw = curl_get(url, timeout=10)
-    d = json.loads(raw)
-    return d["data"][f"{ex}{code}"].get("m1", []) or []
+    for _ in range(retries):
+        r = subprocess.run(["curl", "-s", "--max-time", "20", url], capture_output=True)
+        out = r.stdout.decode("utf-8", "replace")
+        if out.strip():
+            try:
+                d = json.loads(out)
+                return d["data"][f"{ex}{code}"].get("m1", []) or []
+            except Exception:
+                pass
+    return []
 
 
-def fetch_history(code: str, days_back: int = 30) -> dict[str, list[dict]]:
+def fetch_history(code: str, days_back: int = 40) -> dict[str, list[dict]]:
     """按 anchor 递归拉取，返回 {date_yyyymmdd: [bar dict]}."""
     cache_f = BACKTEST_CACHE / f"{code}_hist.json"
     if cache_f.exists():
         try:
             cached = json.loads(cache_f.read_text())
-            # 已缓存的话直接用
             print(f"[{code}] 用缓存 {len(cached)} 天")
             return cached
         except Exception:
             pass
 
-    collected: dict[str, dict] = {}  # ts -> raw bar
-    # 从今天倒退，每 3 天一个 anchor
-    anchors = []
+    collected: dict[str, list] = {}
     today = datetime.now()
-    for k in range(0, days_back, 3):
-        d = (today.timestamp() - k * 86400)
-        dt = datetime.fromtimestamp(d)
-        anchors.append(dt.strftime("%Y%m%d150000"))
-
-    for a in anchors:
-        try:
-            bars = _fetch_batch(code, a)
-        except Exception as e:
-            print(f"[{code}] anchor={a} 抓取失败：{e}")
-            continue
-        for b in bars:
+    for k in range(0, days_back, 2):
+        a = (today - timedelta(days=k)).strftime("%Y%m%d150000")
+        for b in _fetch_batch(code, a):
             if b and len(b) >= 6:
                 collected[b[0]] = b
 
-    # 按日期分组，转成 astock bar dict
     by_date: dict[str, list[dict]] = defaultdict(list)
     for ts, raw in collected.items():
         date = ts[:8]
-        # raw: [time, open, close, high, low, volume, {}, extra]
         try:
-            open_ = float(raw[1])
-            close_ = float(raw[2])
-            high_ = float(raw[3])
-            low_ = float(raw[4])
+            open_, close_, high_, low_ = (float(raw[1]), float(raw[2]), float(raw[3]), float(raw[4]))
             vol = int(float(raw[5]))
         except (ValueError, TypeError):
             continue
-
-        # 转成 astock 里的时间格式 "YYYY-MM-DD HH:MM"
         yyyy_mm_dd = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
         hh_mm = f"{ts[8:10]}:{ts[10:12]}"
         by_date[date].append({
             "time": f"{yyyy_mm_dd} {hh_mm}",
-            "open": open_,
-            "close": close_,
-            "high": high_,
-            "low": low_,
-            "volume": vol,
-            "amount": close_ * vol * 100,  # 手 → 股 * 元
-            # vwap 稍后按日累积算
+            "open": open_, "close": close_, "high": high_, "low": low_,
+            "volume": vol, "amount": close_ * vol * 100,
         })
 
-    # 每天内按时间排序 + 补 vwap
     result: dict[str, list[dict]] = {}
     for date, bars in by_date.items():
-        if len(bars) < 100:  # 不足半天，跳过
+        if len(bars) < 100:
             continue
         bars.sort(key=lambda b: b["time"])
-        cum_amt = 0.0
-        cum_vol = 0
+        cum_amt = cum_vol = 0.0
         for b in bars:
             cum_amt += b["amount"]
             cum_vol += b["volume"] * 100
             b["vwap"] = cum_amt / cum_vol if cum_vol > 0 else b["close"]
         result[date] = bars
 
-    # 缓存
     cache_f.write_text(json.dumps(result, ensure_ascii=False))
     print(f"[{code}] 抓到 {len(result)} 完整交易日")
     return result
 
 
 def analyze_day(code: str, date: str, bars: list[dict], preclose: float) -> dict:
-    """跑 detect_signals，计算指标."""
     scored = score_opening(bars, preclose)
     label = scored["label"]
     sigs = detect_signals(bars, preclose, label, code=code)
@@ -133,96 +121,101 @@ def analyze_day(code: str, date: str, bars: list[dict], preclose: float) -> dict
     day_high = max(b["high"] for b in bars)
     day_range = day_high - day_low
 
-    total_profit = 0.0
-    n_pairs = 0
-    n_losing = 0
-    best_buy_gap = None  # 最靠近 day_low 的买点距离
-    best_sell_gap = None  # 最靠近 day_high 的卖点距离
+    buys = [s for s in sigs if s["type"] == "buy"]
+    sells = [s for s in sigs if s["type"] == "sell"]
+    orphans = sum(1 for s in sigs if not s.get("partner"))
 
+    # 配对盈亏：遍历 pair_id
+    pairs: dict = defaultdict(dict)
     for s in sigs:
-        if s["type"] == "buy" and s.get("partner_price"):
-            profit = s["partner_price"] - s["price"]
+        pid = s.get("pair_id")
+        if pid is not None:
+            pairs[pid][s["type"]] = s
+    total_profit = 0.0
+    n_pairs = n_losing = 0
+    for pid, pr in pairs.items():
+        if "buy" in pr and "sell" in pr:
+            profit = pr["sell"]["price"] - pr["buy"]["price"]
             total_profit += profit
             n_pairs += 1
-            if profit < 0:
+            if profit <= 0:
                 n_losing += 1
-            gap = (s["price"] - day_low) / day_low * 100 if day_low else 0
-            if best_buy_gap is None or gap < best_buy_gap:
-                best_buy_gap = gap
-        if s["type"] == "sell" and s.get("partner_price"):
-            gap = (day_high - s["price"]) / day_high * 100 if day_high else 0
-            if best_sell_gap is None or gap < best_sell_gap:
-                best_sell_gap = gap
 
+    best_buy_gap = min(((s["price"] - day_low) / day_low * 100 for s in buys), default=None)
+    best_sell_gap = min(((day_high - s["price"]) / day_high * 100 for s in sells), default=None)
     coverage = (total_profit / day_range * 100) if day_range > 0 else 0
 
     return {
-        "date": date,
-        "code": code,
-        "label": label,
-        "score": scored["score"],
-        "preclose": preclose,
-        "day_low": day_low,
-        "day_high": day_high,
-        "day_range": day_range,
-        "n_pairs": n_pairs,
-        "n_losing": n_losing,
-        "total_profit": total_profit,
-        "best_buy_gap_pct": best_buy_gap,
-        "best_sell_gap_pct": best_sell_gap,
-        "coverage_pct": coverage,
-        "n_bars": len(bars),
+        "date": date, "code": code, "label": label, "score": scored["score"],
+        "preclose": preclose, "day_low": day_low, "day_high": day_high,
+        "day_range": day_range, "day_range_pct": day_range / preclose * 100 if preclose else 0,
+        "n_buys": len(buys), "n_sells": len(sells), "n_pairs": n_pairs,
+        "n_losing": n_losing, "orphans": orphans, "total_profit": total_profit,
+        "best_buy_gap_pct": best_buy_gap, "best_sell_gap_pct": best_sell_gap,
+        "coverage_pct": coverage, "n_bars": len(bars),
     }
 
 
 def main():
-    codes = ["000063", "002230", "600645", "600011", "601138", "002298", "002266"]
-
     all_results: list[dict] = []
-    for code in codes:
-        hist = fetch_history(code)
-        # 按日期顺序，用前一天 close 作 preclose
-        dates = sorted(hist.keys())
-        for i, date in enumerate(dates):
+    for code in HOLDINGS:
+        try:
+            hist = fetch_history(code)
+        except Exception as e:
+            print(f"[{code}] 抓取异常：{e}")
+            continue
+        dates = sorted(d for d in hist.keys() if d >= START_DATE)
+        all_dates = sorted(hist.keys())
+        for date in dates:
             bars = hist[date]
-            preclose = hist[dates[i-1]][-1]["close"] if i > 0 else bars[0]["open"]
+            idx = all_dates.index(date)
+            preclose = hist[all_dates[idx - 1]][-1]["close"] if idx > 0 else bars[0]["open"]
             if preclose <= 0:
                 continue
-            r = analyze_day(code, date, bars, preclose)
-            all_results.append(r)
+            all_results.append(analyze_day(code, date, bars, preclose))
 
-    # 按 code 分组打印
+    all_results.sort(key=lambda r: (r["code"], r["date"]))
+
     print()
-    print("=" * 120)
-    print(f"{'code':<8} {'date':<10} {'label':<6} {'S':>3} {'范围':>10} {'对数':>5} {'亏':>3} {'总盈利':>8} {'覆盖%':>7} {'买离底%':>8} {'卖离顶%':>8}")
-    print("=" * 120)
+    print("=" * 128)
+    print(f"{'code':<8}{'date':<10}{'label':<6}{'S':>3}{'范围':>13}{'振幅%':>7}"
+          f"{'买':>3}{'卖':>3}{'对':>3}{'亏':>3}{'孤':>3}{'总盈利':>8}{'覆盖%':>7}{'买离底%':>8}{'卖离顶%':>8}")
+    print("=" * 128)
     for r in all_results:
         rng = f"{r['day_low']:.2f}→{r['day_high']:.2f}"
-        buy_gap = f"{r['best_buy_gap_pct']:.2f}" if r['best_buy_gap_pct'] is not None else "  —"
-        sell_gap = f"{r['best_sell_gap_pct']:.2f}" if r['best_sell_gap_pct'] is not None else "  —"
-        print(f"{r['code']:<8} {r['date']:<10} {r['label']:<6} {r['score']:>+3} {rng:>10} {r['n_pairs']:>5} {r['n_losing']:>3} {r['total_profit']:>+8.2f} {r['coverage_pct']:>7.1f} {buy_gap:>8} {sell_gap:>8}")
+        bg = f"{r['best_buy_gap_pct']:.2f}" if r["best_buy_gap_pct"] is not None else "—"
+        sg = f"{r['best_sell_gap_pct']:.2f}" if r["best_sell_gap_pct"] is not None else "—"
+        print(f"{r['code']:<8}{r['date']:<10}{r['label']:<6}{r['score']:>+3}{rng:>13}{r['day_range_pct']:>7.2f}"
+              f"{r['n_buys']:>3}{r['n_sells']:>3}{r['n_pairs']:>3}{r['n_losing']:>3}{r['orphans']:>3}"
+              f"{r['total_profit']:>+8.2f}{r['coverage_pct']:>7.1f}{bg:>8}{sg:>8}")
 
-    # 汇总
     print()
-    print("=" * 120)
+    print("=" * 128)
     print("汇总")
-    print("=" * 120)
-    total_days = len(all_results)
+    print("=" * 128)
+    n = len(all_results)
+    if n == 0:
+        print("无结果")
+        return
+    with_sig = sum(1 for r in all_results if r["n_pairs"] > 0)
     total_pairs = sum(r["n_pairs"] for r in all_results)
     total_losing = sum(r["n_losing"] for r in all_results)
-    days_with_signals = sum(1 for r in all_results if r["n_pairs"] > 0)
-    days_no_signals = total_days - days_with_signals
-    total_profit = sum(r["total_profit"] for r in all_results)
-    avg_coverage = statistics.mean(r["coverage_pct"] for r in all_results if r["day_range"] > 0)
+    total_orphans = sum(r["orphans"] for r in all_results)
     buy_gaps = [r["best_buy_gap_pct"] for r in all_results if r["best_buy_gap_pct"] is not None]
     sell_gaps = [r["best_sell_gap_pct"] for r in all_results if r["best_sell_gap_pct"] is not None]
+    covs = [r["coverage_pct"] for r in all_results if r["day_range"] > 0]
 
-    print(f"总测试日数: {total_days}, 出信号日数: {days_with_signals}, 无信号: {days_no_signals}")
-    print(f"总对数: {total_pairs}, 亏损对: {total_losing} ({total_losing/max(total_pairs,1)*100:.1f}%)")
-    print(f"总盈利: {total_profit:+.2f} 元/股")
-    print(f"平均覆盖率（总盈利 / 日振幅）: {avg_coverage:.1f}%")
-    print(f"买点离日内最低 avg={statistics.mean(buy_gaps):.2f}% median={statistics.median(buy_gaps):.2f}%") if buy_gaps else print("无买点数据")
-    print(f"卖点离日内最高 avg={statistics.mean(sell_gaps):.2f}% median={statistics.median(sell_gaps):.2f}%") if sell_gaps else print("无卖点数据")
+    print(f"测试样本(股×日): {n}  |  出信号日: {with_sig} ({with_sig/n*100:.0f}%)  |  无信号日: {n-with_sig}")
+    print(f"总配对: {total_pairs}  |  亏损对(买≥卖): {total_losing} ({total_losing/max(total_pairs,1)*100:.1f}%)  |  孤儿信号: {total_orphans}")
+    print(f"覆盖率(盈利/日振幅) 均值: {statistics.mean(covs):.1f}%  中位: {statistics.median(covs):.1f}%")
+    if buy_gaps:
+        print(f"买点离日内最低  均值: {statistics.mean(buy_gaps):.2f}%  中位: {statistics.median(buy_gaps):.2f}%  最差: {max(buy_gaps):.2f}%")
+    if sell_gaps:
+        print(f"卖点离日内最高  均值: {statistics.mean(sell_gaps):.2f}%  中位: {statistics.median(sell_gaps):.2f}%  最差: {max(sell_gaps):.2f}%")
+
+    out = BACKTEST_CACHE / "_last_run.json"
+    out.write_text(json.dumps(all_results, ensure_ascii=False, indent=2))
+    print(f"\n结果已存 {out}")
 
 
 if __name__ == "__main__":

@@ -314,13 +314,15 @@ def detect_signals(
     code: str = "",
     min_gap: float | None = None,
     min_gap_pct: float = 0.003,
-    min_gap_abs: float = 0.02,
+    min_gap_abs: float = 0.005,
 ) -> list[dict]:
     """扫描分时序列，产出编号后的买卖点。
 
     差价约束：每对 |Δprice| ≥ max(min_gap_abs, first_price * min_gap_pct)
-    - 默认 0.3% + 0.02元 floor，兼顾贵/便宜票
-    - 手册的"0.2元不做"对应中兴通讯 @36元 → 0.55%，仍属合理档位
+    - 默认 0.3% + 0.005元 floor：百分比线主导，floor 只兜底极便宜标的
+    - 0.02元的旧 floor 对 <2元 ETF（软件/游戏/军工）= 要求 1.6~2.8% 波动，
+      把便宜标的的做T机会全卡死；ETF 无印花税、成本更低，更该放开
+    - floor=0.005 只影响 <1.67元 标的（price*0.003<0.005），≥7元票走百分比线不变
     - 若传统 `min_gap` 被显式指定，则整段用它（向后兼容旧调用/测试）
 
     Returns list of dicts: {index, time, price, type, reason, seq, note}.
@@ -412,7 +414,7 @@ def _pair_and_limit(
     signals: list[dict],
     label: str,
     min_gap_pct: float = 0.003,
-    min_gap_abs: float = 0.02,
+    min_gap_abs: float = 0.005,
     min_gap_override: float | None = None,
     max_pairs: int = 3,
     pair_id_start: int = 1,
