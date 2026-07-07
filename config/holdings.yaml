@@ -2,9 +2,9 @@ accounts:
 - broker: 开源证券
   holdings:
   - code: '002230'
-    cost: 44.509
+    cost: 43.666
     name: 科大讯飞
-    shares: 2000
+    shares: 2600
   - code: 002298
     cost: 9.041
     name: 中电鑫龙
@@ -25,40 +25,52 @@ accounts:
 - broker: 开源证券
   holdings:
   - code: '000063'
-    cost: 43.541
+    cost: 43.404
     name: 中兴通讯
     shares: 5000
   - code: '002266'
-    cost: 7.707
+    cost: 7.546
     name: 融发核电
-    shares: 11600
+    shares: 12600
   - code: '515230'
-    cost: 0.831
+    cost: 0.812
     name: 软件ETF
-    shares: 71000
+    shares: 81000
   - code: '601138'
-    cost: 99.981
+    cost: 95.324
     name: 工业富联
-    shares: 700
+    shares: 800
   - code: '159869'
     cost: 1.116
     name: 游戏传媒ETF
     shares: 38200
   - code: '603236'
-    cost: 53.738
+    cost: 53.473
     name: 移远通信
     shares: 100
   - code: '002312'
     cost: 10.042
     name: 川发龙蟒
     shares: 400
+  - code: '600111'
+    cost: 47.214
+    name: 北方稀土
+    shares: 100
+  - code: '002902'
+    cost: 26.789
+    name: 铭普光磁
+    shares: 100
+  - code: '002085'
+    cost: 11.409
+    name: 万丰奥威
+    shares: 100
   name: ymj-ky
 - broker: 国泰海通证券
   holdings:
   - code: '002230'
-    cost: 42.819
+    cost: 42.345
     name: 科大讯飞
-    shares: 1500
+    shares: 2000
   - code: '600645'
     cost: 20.615
     name: 中源协和
@@ -76,15 +88,11 @@ accounts:
     name: 中电鑫龙
     shares: 3000
   - code: '002241'
-    cost: 25.006
+    cost: 23.254
     name: 歌尔股份
-    shares: 1000
+    shares: 2000
   - code: '600410'
     cost: 17.488
     name: 华胜天成
     shares: 1200
-  - code: '000034'
-    cost: 28.002
-    name: 神州数码
-    shares: 200
   name: wp-gtht
